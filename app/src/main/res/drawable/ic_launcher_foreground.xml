@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 開本書：深底＋琥珀書頁，跟 APP 夜間主題同色 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E8C46A"
+        android:pathData="M54,34 C47,30.5 39,30.5 33,32.5 L33,76.5 C39,74.5 47,74.5 54,78 Z" />
+    <path
+        android:fillColor="#E8C46A"
+        android:pathData="M54,34 C61,30.5 69,30.5 75,32.5 L75,76.5 C69,74.5 61,74.5 54,78 Z" />
+    <path
+        android:fillColor="#121212"
+        android:pathData="M52.8,33 L55.2,33 L55.2,79 L52.8,79 Z" />
+</vector>

@@ -1,0 +1,30 @@
+# Gradle & build 產物（本機重 build 就有，不進版控）
+.gradle/
+build/
+app/build/
+*/build/
+captures/
+
+# 本機 SDK 路徑（每台電腦不一樣）
+local.properties
+
+# 簽名：key 和密碼都不進版控
+# 換電腦建置時自己放回 txtreader.jks，並重建 gradle.properties 裡的四行密碼
+*.jks
+*.keystore
+gradle.properties
+
+# APK/AAB 是產物不進版控（要裝去本機 build）
+*.apk
+*.aab
+
+# IDE 設定（每個人環境不同）
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS 垃圾
+.DS_Store
+Thumbs.db
