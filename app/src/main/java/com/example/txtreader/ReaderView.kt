@@ -22,7 +22,7 @@ class ReaderView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private val paginator = Paginator()
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#E0E0E0") }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FFFFFF") }
     private val hlPaint = Paint().apply { color = Color.parseColor("#4A3F00") }
 
     /** TTS 正在念的源行（-1 = 沒在念）；只 invalidate，不重排。 */
@@ -63,7 +63,7 @@ class ReaderView @JvmOverloads constructor(
 
     var textSizeSp: Float = 20f
         set(v) {
-            field = v.coerceIn(12f, 32f)
+            field = v.coerceIn(12f, 48f)
             applyTextSize()
             relayout()
         }
@@ -104,6 +104,8 @@ class ReaderView @JvmOverloads constructor(
     })
 
     init {
+        // 行距預設 8dp（之前寫死 12px，在高密度螢幕上只有約 4dp 太擠）
+        lineSpacingExtraPx = 14f * resources.displayMetrics.density
         applyTextSize()
         isClickable = true
         isFocusable = true
