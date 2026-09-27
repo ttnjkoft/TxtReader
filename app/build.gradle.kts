@@ -65,3 +65,13 @@ dependencies {
         exclude(group = "org.apache.httpcomponents")
     }
 }
+
+// 產物檔名：release 輸出叫 TxtReader.apk（不用每次找 app-release.apk）
+android.applicationVariants.all {
+    if (buildType.name == "release") {
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "TxtReader.apk"
+        }
+    }
+}

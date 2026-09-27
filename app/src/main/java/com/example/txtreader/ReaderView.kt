@@ -69,9 +69,33 @@ class ReaderView @JvmOverloads constructor(
         }
 
     var lineSpacingExtraPx: Float = 12f
+        set(v) {
+            field = v
+            relayout()
+        }
 
-    /** 頁面四邊邊距（dp）。之前寫死 48太大，改 16；要更擠或更鬆改這裡。 */
+    /** 字距（em）。Paint 一把尺同時管量寬和畫字，分頁不會亂。 */
+    var letterSpacingEm: Float = 0f
+        set(v) {
+            field = v
+            paint.letterSpacing = v
+            relayout()
+        }
+
+    /** 閱讀字色。只影響畫筆顏色，不影響排版，invalidate 即可。 */
+    var textColor: Int = Color.parseColor("#FFFFFF")
+        set(v) {
+            field = v
+            paint.color = v
+            invalidate()
+        }
+
+    /** 頁面四邊邊距（dp）。改了即時重排。 */
     var paddingDp: Float = 16f
+        set(v) {
+            field = v
+            relayout()
+        }
 
     private fun padPx(): Float = paddingDp * resources.displayMetrics.density
 

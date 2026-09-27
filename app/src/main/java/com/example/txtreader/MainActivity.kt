@@ -15,9 +15,11 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -45,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tocAdapter: ArrayAdapter<String>
     private lateinit var btnS2T: Button
     private lateinit var btnSpeak: Button
+    private lateinit var btnSettings: Button
     private lateinit var speaker: Speaker
     private var pausedLine = -1
 
@@ -88,6 +91,10 @@ class MainActivity : AppCompatActivity() {
 
         reader = ReaderView(this)
         reader.textSizeSp = prefs.getFloat("textSizeSp", 20f)
+        reader.lineSpacingExtraPx = prefs.getFloat("linePx", 8f * resources.displayMetrics.density)
+        reader.letterSpacingEm = prefs.getFloat("letterEm", 0f)
+        reader.paddingDp = prefs.getFloat("paddingDp", 16f)
+        reader.textColor = prefs.getInt("textColor", Color.parseColor("#FFFFFF"))
         reader.onProgress = { line, total ->
             refreshStatus()
             refreshTocSelection()
@@ -128,6 +135,7 @@ class MainActivity : AppCompatActivity() {
         val btnSmaller = barBtn("A-")
         val btnBigger = barBtn("A+")
         btnSpeak = barBtn("朗讀")
+        btnSettings = barBtn("設定")
         btnShelf.setOnClickListener { openShelf() }
         btnToc.setOnClickListener { openToc() }
         btnS2T.setOnClickListener { toggleS2T() }
@@ -135,13 +143,14 @@ class MainActivity : AppCompatActivity() {
         btnSmaller.setOnClickListener { reader.textSizeSp -= 1f; saveSettings() }
         btnBigger.setOnClickListener { reader.textSizeSp += 1f; saveSettings() }
         btnSpeak.setOnClickListener { toggleSpeak() }
+        btnSettings.setOnClickListener { openDisplaySettings() }
 
         // 頂欄改兩行：第一行狀態全文顯示，第二行六顆等寬按鈕，不再被擠掉
         // 頂選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在上，不擠版面）
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#1A1A1A"))
-            for (b in listOf(btnShelf, btnToc, btnS2T, btnOpen, btnSmaller, btnBigger, btnSpeak)) {
+                for (b in listOf(btnShelf, btnToc, btnS2T, btnOpen, btnSmaller, btnBigger, btnSpeak, btnSettings)) {
                 addView(b, LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 ))
@@ -460,12 +469,104 @@ class MainActivity : AppCompatActivity() {
         refreshStatus()
     }
 
-    /** 設定存檔：字體大小＋簡繁開關（SharedPreferences，夠自用了）。 */
+    /** 設定存檔：字體＋簡繁＋行距＋字距＋字色（SharedPreferences，夠自用了）。 */
     private fun saveSettings() {
         prefs.edit()
             .putFloat("textSizeSp", reader.textSizeSp)
             .putBoolean("s2t", reader.s2tEnabled)
+            .putFloat("linePx", reader.lineSpacingExtraPx)
+            .putFloat("letterEm", reader.letterSpacingEm)
+            .putInt("textColor", reader.textColor)
+            .putFloat("paddingDp", reader.paddingDp)
             .apply()
+    }
+
+    /** 顯示設定：行距／字距／字色，拉了即時預覽，關掉自動存。 */
+    private fun openDisplaySettings() {
+        val den = resources.displayMetrics.density
+        fun label(t: String): TextView = TextView(this).apply {
+            text = t
+            textSize = 14f
+            setTextColor(Color.parseColor("#E0E0E0"))
+        }
+        val pad = (20 * den).toInt()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        val lineLabel = label("")
+        val lineBar = SeekBar(this).apply {
+            max = 20
+            progress = (reader.lineSpacingExtraPx / den).toInt().coerceIn(0, 20)
+        }
+        val letterLabel = label("")
+        val letterBar = SeekBar(this).apply {
+            max = 10
+            progress = (reader.letterSpacingEm * 50).toInt().coerceIn(0, 10)
+        }
+        val marginLabel = label("")
+        val marginBar = SeekBar(this).apply {
+            max = 48
+            progress = reader.paddingDp.toInt().coerceIn(0, 48)
+        }
+        fun refreshLabels() {
+            lineLabel.text = "行距：${lineBar.progress}dp"
+            letterLabel.text = "字距：${"%.2f".format(letterBar.progress / 50f)}em"
+            marginLabel.text = "邊界：${marginBar.progress}dp"
+        }
+        val seekListener = object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
+                if (s === lineBar) reader.lineSpacingExtraPx = p * den
+                else if (s === marginBar) reader.paddingDp = p.toFloat()
+                else reader.letterSpacingEm = p / 50f
+                refreshLabels()
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        }
+        lineBar.setOnSeekBarChangeListener(seekListener)
+        letterBar.setOnSeekBarChangeListener(seekListener)
+        marginBar.setOnSeekBarChangeListener(seekListener)
+        refreshLabels()
+        root.addView(lineLabel)
+        root.addView(lineBar)
+        root.addView(letterLabel)
+        root.addView(letterBar)
+        root.addView(marginLabel)
+        root.addView(marginBar)
+        root.addView(label("字色"))
+        val colors = intArrayOf(
+            Color.parseColor("#FFFFFF"),
+            Color.parseColor("#F5F0E6"),
+            Color.parseColor("#CCCCCC"),
+            Color.parseColor("#E8C46A")
+        )
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val swatches = ArrayList<Button>()
+        for (c in colors) {
+            val b = Button(this).apply {
+                text = if (c == reader.textColor) "✓" else ""
+                setBackgroundColor(c)
+            }
+            b.setOnClickListener {
+                reader.textColor = c
+                swatches.forEach { it.text = "" }
+                b.text = "✓"
+            }
+            swatches.add(b)
+            row.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        root.addView(row)
+        AlertDialog.Builder(this)
+            .setTitle("顯示設定")
+            .setView(root)
+            .setPositiveButton("完成", null)
+            .create()
+            .apply {
+                setOnDismissListener { saveSettings() }
+                show()
+            }
     }
 
     private fun displayTitle(raw: String): String =
@@ -749,7 +850,7 @@ class MainActivity : AppCompatActivity() {
                     btnOpen.isEnabled = true
                     btnOpen.text = "開檔"
                     // 啟動自動開舊檔失敗就靜靜停著（授權被收回或檔刪了），不等於手動開檔失敗
-                    if (!quiet) Toast.makeText(this@MainActivity, "開檔失敗：${e.message}", Toast.LENGTH_LONG).show()
+                    if (!quiet)                     Toast.makeText(this@MainActivity, "開檔失敗 [${e.javaClass.simpleName}]: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }.apply { isDaemon = true; start() }
