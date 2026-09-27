@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var lastUploadAt = 0L
     private var openedPos: TextPos? = null
     private var openedRowTime = 0L
+    private var fontLabelView: TextView? = null
 
     private val openDoc = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) openUri(uri)
@@ -85,6 +87,9 @@ class MainActivity : AppCompatActivity() {
     private val driveAuth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == RESULT_OK) syncAfterLogin()
     }
+    private val fontPick = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) copyFont(uri)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +100,14 @@ class MainActivity : AppCompatActivity() {
         reader.letterSpacingEm = prefs.getFloat("letterEm", 0f)
         reader.paddingDp = prefs.getFloat("paddingDp", 16f)
         reader.textColor = prefs.getInt("textColor", Color.parseColor("#FFFFFF"))
+        // 自選字型：內部拷貝還在就套用，不在就靜靜用系統預設
+        prefs.getString("fontPath", null)?.let { p ->
+            try {
+                val f = java.io.File(p)
+                if (f.exists()) reader.typeface = android.graphics.Typeface.createFromFile(f)
+            } catch (_: Exception) {
+            }
+        }
         reader.onProgress = { line, total ->
             refreshStatus()
             refreshTocSelection()
@@ -558,6 +571,20 @@ class MainActivity : AppCompatActivity() {
             row.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
         root.addView(row)
+        fontLabelView = label("字型：${prefs.getString("fontName", null) ?: "系統預設"}")
+        root.addView(fontLabelView)
+        val fontRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val btnPickFont = Button(this).apply { text = "選擇字型檔" }
+        val btnDefFont = Button(this).apply { text = "恢復預設" }
+        btnPickFont.setOnClickListener { fontPick.launch(arrayOf("*/*")) }
+        btnDefFont.setOnClickListener {
+            reader.typeface = null
+            prefs.edit().remove("fontPath").remove("fontName").apply()
+            fontLabelView?.text = "字型：系統預設"
+        }
+        fontRow.addView(btnPickFont, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        fontRow.addView(btnDefFont, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(fontRow)
         AlertDialog.Builder(this)
             .setTitle("顯示設定")
             .setView(root)
@@ -567,6 +594,40 @@ class MainActivity : AppCompatActivity() {
                 setOnDismissListener { saveSettings() }
                 show()
             }
+    }
+
+    /** 字型檔：第一次拷貝到內部存著（以後不用再選），套用＋記名。只收 ttf/otf/ttc。 */
+    private fun copyFont(uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+        }
+        Thread {
+            try {
+                var name = "custom"
+                contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0 && c.moveToFirst()) c.getString(idx)?.let { name = it }
+                }
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (ext != "ttf" && ext != "otf" && ext != "ttc") {
+                    throw IllegalStateException("只支援 ttf / otf / ttc")
+                }
+                val out = java.io.File(java.io.File(filesDir, "fonts").apply { mkdirs() }, "custom.$ext")
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    out.outputStream().use { ous -> ins.copyTo(ous) }
+                } ?: throw IllegalStateException("讀不到字型檔")
+                val tf = android.graphics.Typeface.createFromFile(out)
+                runOnUiThread {
+                    reader.typeface = tf
+                    prefs.edit().putString("fontPath", out.absolutePath).putString("fontName", name).apply()
+                    fontLabelView?.text = "字型：$name"
+                    Toast.makeText(this, "已套用「$name」", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "字型載入失敗：${e.message}", Toast.LENGTH_LONG).show() }
+            }
+        }.apply { isDaemon = true; start() }
     }
 
     private fun displayTitle(raw: String): String =

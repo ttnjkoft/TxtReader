@@ -90,6 +90,14 @@ class ReaderView @JvmOverloads constructor(
             invalidate()
         }
 
+    /** 自選字型（null = 系統預設）。同一把 paint 量寬畫字，分頁自動對。 */
+    var typeface: android.graphics.Typeface? = null
+        set(v) {
+            field = v
+            paint.typeface = v
+            relayout()
+        }
+
     /** 頁面四邊邊距（dp）。改了即時重排。 */
     var paddingDp: Float = 16f
         set(v) {
