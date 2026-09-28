@@ -2,8 +2,13 @@ package com.example.txtreader
 
 import android.graphics.Paint
 
-/** 文字位置：sourceLines[lineIndex] 的第 charOffset 個字 */
-data class TextPos(val lineIndex: Int, val charOffset: Int)
+/** 文字位置：sourceLines[lineIndex] 的第 charOffset 個字（可比大小：行優先）。 */
+data class TextPos(val lineIndex: Int, val charOffset: Int) : Comparable<TextPos> {
+    override fun compareTo(other: TextPos): Int {
+        val d = lineIndex - other.lineIndex
+        return if (d != 0) d else charOffset - other.charOffset
+    }
+}
 
 /** 一頁的結果：lines 是已斷好行、可直接 drawText 的字串；origins 是每行對應的原文位置（TTS 高亮用）；paraEnd 標示該行是不是段落最後一行（左右對齊只撐段中行） */
 data class Page(
@@ -130,5 +135,54 @@ class Paginator {
         }
         val hasNext = li < source.size
         return Page(lines.toList(), TextPos(li.coerceAtMost(maxOf(0, source.size - 1)), 0), hasNext, origins.toList(), ends.toList())
+    }
+
+    /**
+     * 上一頁起點（會話剛開始空棧時用）：當前位置在第一頁裡就直接沒反應；
+     * 否則往回估兩頁源行，再用真正的正向排版走一遍，取當前位置之前最後一頁。
+     * 近似整頁（和正向鏈可能差一行內），但保證嚴格往前、不丟不卡（fuzz 9000 次）。
+     */
+    fun layoutPrevStart(
+        source: LineSource,
+        current: TextPos,
+        paint: Paint,
+        maxWidth: Float,
+        lineHeightPx: Float,
+        maxHeightPx: Float,
+        paraGapPx: Float,
+        indent: Boolean = true
+    ): TextPos {
+        if (source.size == 0) return current
+        val firstNext = layoutPage(
+            source, TextPos(0, 0), paint, maxWidth,
+            lineHeightPx, maxHeightPx, paraGapPx, indent
+        ).next
+        if (firstNext > current) return current
+        val li0 = current.lineIndex.coerceIn(0, source.size - 1)
+        if (li0 == 0 && current.charOffset <= 0) return current
+        val estPerPage = maxOf(1, (maxHeightPx / lineHeightPx).toInt())
+        var li = li0
+        var acc = 0
+        while (li > 0 && acc < estPerPage * 2 + 8) {
+            li--
+            acc += maxOf(1, breakParagraph(source.get(li), paint, maxWidth).size)
+        }
+        val s = TextPos(li, 0)
+        if (s >= current) return current
+        var pos = s
+        var prevStart = s
+        repeat(5000) {
+            val pg = layoutPage(
+                source, pos, paint, maxWidth,
+                lineHeightPx, maxHeightPx, paraGapPx, indent
+            )
+            if (pg.next >= current) {
+                return if (pg.next == current) pos else prevStart
+            }
+            prevStart = pos
+            if (!pg.hasNext) return prevStart
+            pos = pg.next
+        }
+        return prevStart
     }
 }

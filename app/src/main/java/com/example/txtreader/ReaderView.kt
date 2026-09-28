@@ -255,8 +255,23 @@ class ReaderView @JvmOverloads constructor(
     }
 
     fun prevPage() {
-        if (backStack.isEmpty()) return
-        current = backStack.removeLast()
+        if (backStack.isNotEmpty()) {
+            current = backStack.removeLast()
+            manualGen++
+            relayout()
+            return
+        }
+        // 會話剛開始（空棧）：往回算一頁；在第一頁裡就沒反應。
+        // 注意這條路不寫 backStack，這樣連點上一頁才能一直往前走。
+        if (width == 0 || height == 0) return
+        val lh = paint.fontSpacing + lineSpacingExtraPx
+        val availH = max(100f, height - padPx() * 2)
+        val p = paginator.layoutPrevStart(
+            lines, current, paint, contentWidth(), lh, availH,
+            paragraphGapDp * resources.displayMetrics.density, firstLineIndent
+        )
+        if (p == current) return
+        current = p
         manualGen++
         relayout()
     }

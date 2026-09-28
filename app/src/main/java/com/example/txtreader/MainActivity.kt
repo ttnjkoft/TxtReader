@@ -19,6 +19,7 @@ import android.widget.ListView
 import android.widget.TextView
 import android.widget.SeekBar
 import android.widget.ProgressBar
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnS2T: Button
     private lateinit var btnSpeak: Button
     private lateinit var btnSettings: Button
+    private lateinit var btnSearch: Button
     private lateinit var speaker: Speaker
     private var pausedLine = -1
 
@@ -68,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     private var lastUploadAt = 0L
     private var openedPos: TextPos? = null
     private var openedRowTime = 0L
+    // 最後存過的位置：沒動就不存，免得舊位置配新時間戳洗掉別台進度
+    private var lastSavedPos: TextPos? = null
     private var fontLabelView: TextView? = null
 
     private val openDoc = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -145,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         val btnBigger = barBtn("A+")
         btnSpeak = barBtn("朗讀")
         btnSettings = barBtn("設定")
+        btnSearch = barBtn("搜尋")
         btnShelf.setOnClickListener { openShelf() }
         btnToc.setOnClickListener { openToc() }
         btnS2T.setOnClickListener { toggleS2T() }
@@ -153,13 +158,14 @@ class MainActivity : AppCompatActivity() {
         btnBigger.setOnClickListener { reader.textSizeSp += 1f; saveSettings() }
         btnSpeak.setOnClickListener { toggleSpeak() }
         btnSettings.setOnClickListener { openDisplaySettings() }
+        btnSearch.setOnClickListener { openSearch() }
 
         // 頂欄改兩行：第一行狀態全文顯示，第二行六顆等寬按鈕，不再被擠掉
         // 頂選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在上，不擠版面）
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#1A1A1A"))
-                for (b in listOf(btnShelf, btnToc, btnS2T, btnOpen, btnSmaller, btnBigger, btnSpeak, btnSettings)) {
+                for (b in listOf(btnShelf, btnToc, btnS2T, btnOpen, btnSmaller, btnBigger, btnSpeak, btnSettings, btnSearch)) {
                 addView(b, LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 ))
@@ -659,6 +665,146 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
+    /** 全文搜尋：搜目前所見文字（含簡繁轉換），結果帶章節＋上下文，點了跳行。上限 500 筆。 */
+    private fun openSearch() {
+        if (currentFile == null) {
+            Toast.makeText(this, "先開一本書", Toast.LENGTH_SHORT).show()
+            return
+        }
+        lateinit var searchDlg: AlertDialog
+        val input = EditText(this).apply {
+            hint = "輸入關鍵字"
+            setSingleLine()
+            setTextColor(Color.parseColor("#E0E0E0"))
+            setHintTextColor(Color.parseColor("#808080"))
+        }
+        val countLabel = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#B0B0B0"))
+            gravity = Gravity.END
+        }
+        val hitLines = ArrayList<Int>()
+        val hitSnips = ArrayList<String>()
+        val resultAdapter = object : ArrayAdapter<String>(
+            this, android.R.layout.simple_list_item_2, android.R.id.text1, ArrayList<String>()
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = super.getView(position, convertView, parent)
+                v.findViewById<TextView>(android.R.id.text1)
+                    ?.setTextColor(Color.parseColor("#E0E0E0"))
+                val t2 = v.findViewById<TextView>(android.R.id.text2)
+                t2?.setTextColor(Color.parseColor("#B0B0B0"))
+                t2?.text = hitSnips.getOrNull(position) ?: ""
+                return v
+            }
+        }
+        val list = ListView(this).apply {
+            adapter = resultAdapter
+            onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
+                hitLines.getOrNull(pos)?.let { reader.jumpToLine(it) }
+                searchDlg.dismiss()
+            }
+        }
+        val btnGo = Button(this).apply { text = "搜尋" }
+        btnGo.setOnClickListener {
+            val kw = input.text.toString()
+            if (kw.isEmpty()) {
+                Toast.makeText(this, "輸入關鍵字", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            doSearch(kw, resultAdapter, hitLines, hitSnips, countLabel)
+        }
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+            addView(input, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(btnGo)
+                addView(countLabel, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ))
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(list, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ))
+        }
+        searchDlg = AlertDialog.Builder(this)
+            .setTitle("全文搜尋")
+            .setView(root)
+            .setPositiveButton("關閉", null)
+            .create()
+        searchDlg.show()
+    }
+
+    private fun doSearch(
+        keyword: String,
+        adapter: ArrayAdapter<String>,
+        hitLines: ArrayList<Int>,
+        hitSnips: ArrayList<String>,
+        countLabel: TextView
+    ) {
+        countLabel.text = "搜尋中…"
+        Thread {
+            try {
+                val src = reader.activeSource()
+                val kw = keyword.lowercase()
+                // 中文無大小寫：關鍵字沒有 cases 時跳過整本 lowercase，省一次全書複製
+                val foldCase = keyword.any { it.lowercaseChar() != it.uppercaseChar() }
+                val needle = if (foldCase) kw else keyword
+                val titles = ArrayList<String>()
+                val lines = ArrayList<Int>()
+                val snips = ArrayList<String>()
+                val f = currentFile
+                var i = 0
+                while (i < src.size && titles.size < 500) {
+                    val line = try {
+                        src.get(i)
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    val pos = (if (foldCase) line.lowercase() else line).indexOf(needle)
+                    if (pos >= 0) {
+                        lines.add(i)
+                        val ch = if (f != null) {
+                            val ci = f.chapterIndexForLine(i)
+                            if (ci >= 0) displayTitle(f.chapters[ci].title) else "（卷首）"
+                        } else ""
+                        val pct = (i + 1) * 100 / maxOf(1, src.size)
+                        titles.add(if (ch.isEmpty()) "$pct%" else "$ch｜$pct%")
+                        val start = maxOf(0, pos - 10)
+                        val end = minOf(line.length, pos + needle.length + 20)
+                        var snip = line.substring(start, end).trim()
+                        if (start > 0) snip = "…$snip"
+                        if (end < line.length) snip = "$snip…"
+                        snips.add(snip)
+                    }
+                    i++
+                }
+                val more = i < src.size
+                runOnUiThread {
+                    hitLines.clear()
+                    hitLines.addAll(lines)
+                    hitSnips.clear()
+                    hitSnips.addAll(snips)
+                    adapter.clear()
+                    adapter.addAll(titles)
+                    adapter.notifyDataSetChanged()
+                    countLabel.text = if (titles.isEmpty()) "無結果"
+                    else "${titles.size} 筆" + if (more) "（僅顯示前500）" else ""
+                }
+            } catch (e: Exception) {
+                runOnUiThread { countLabel.text = "搜尋失敗：${e.message}" }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
     private fun displayTitle(raw: String): String =
         if (reader.s2tEnabled) S2T.convert(raw) else raw
 
@@ -713,20 +859,31 @@ class MainActivity : AppCompatActivity() {
         if (now - lastSaveAt > 2000) saveNow()
     }
 
-    private fun saveNow() {
-        val uriStr = currentUri?.toString() ?: return
-        val f = currentFile ?: return
+    private data class Progress(
+        val uri: String, val line: Int, val off: Int, val pct: Int, val chapter: String, val t: Long
+    )
+
+    /** 目前進度快照（純計算，不碰 DB；存原文章節，顯示時再按開關轉）。 */
+    private fun snapshotProgress(): Progress? {
+        val uriStr = currentUri?.toString() ?: return null
+        val f = currentFile ?: return null
         val pos = reader.currentPos()
         val ci = chapterIndexFor(reader.currentLine())
         val ch = if (ci >= 0) currentChapters[ci].title else ""
         val pct = (reader.currentLine() + 1) * 100 / maxOf(1, f.size)
-        lastSaveAt = System.currentTimeMillis()
+        return Progress(uriStr, pos.lineIndex, pos.charOffset, pct, ch, System.currentTimeMillis())
+    }
+
+    private fun saveNow() {
+        val p = snapshotProgress() ?: return
+        if (p.line == lastSavedPos?.lineIndex && p.off == lastSavedPos?.charOffset) return
+        lastSavedPos = TextPos(p.line, p.off)
+        lastSaveAt = p.t
         maybeUpload()
-        // 章節存原文，顯示時再按開關轉，避免重複轉換
         Thread {
             try {
                 Db.get(applicationContext).books()
-                    .saveProgress(uriStr, pos.lineIndex, pos.charOffset, pct, ch, lastSaveAt)
+                    .saveProgress(p.uri, p.line, p.off, p.pct, p.chapter, p.t)
             } catch (_: Exception) {
             }
         }.apply { isDaemon = true; start() }
@@ -778,12 +935,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 手動同步的統一入口（一定走背景線程；瀏覽器授權回來走 onResume）。 */
-    private fun syncAfterLogin() {
+    private fun syncAfterLogin(announce: Boolean = true) {
         Thread {
             try {
+                // 先把本機最新進度寫庫＋推上雲，再拉別台的（不然節流內的進度合不上來）；
+                // 位置沒動就跳過寫庫，舊位置不配新時間戳
+                snapshotProgress()?.let { p ->
+                    if (p.line != lastSavedPos?.lineIndex || p.off != lastSavedPos?.charOffset) {
+                        lastSaveAt = p.t
+                        lastSavedPos = TextPos(p.line, p.off)
+                        try {
+                            Db.get(applicationContext).books()
+                                .saveProgress(p.uri, p.line, p.off, p.pct, p.chapter, p.t)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                DropboxSync.uploadLocal(applicationContext)
                 val r = DropboxSync.syncNow(applicationContext, currentFile?.name)
                 runOnUiThread {
-                    Toast.makeText(this, r.msg, Toast.LENGTH_SHORT).show()
+                    if (announce) Toast.makeText(this, r.msg, Toast.LENGTH_SHORT).show()
                     refreshShelf()
                     refreshStatus()
                     applyWatched(r.watched)
@@ -791,9 +962,9 @@ class MainActivity : AppCompatActivity() {
             } catch (e: com.dropbox.core.InvalidAccessTokenException) {
                 // token 被使用者在網頁端收回等：清掉，下次重登
                 DropboxSync.unlink(applicationContext)
-                runOnUiThread { Toast.makeText(this, "授權失效，請重按同步登入", Toast.LENGTH_LONG).show() }
+                if (announce) runOnUiThread { Toast.makeText(this, "授權失效，請重按同步登入", Toast.LENGTH_LONG).show() }
             } catch (e: Exception) {
-                runOnUiThread { Toast.makeText(this, "同步失敗：${e.message}", Toast.LENGTH_LONG).show() }
+                if (announce) runOnUiThread { Toast.makeText(this, "同步失敗：${e.message}", Toast.LENGTH_LONG).show() }
             }
         }.apply { isDaemon = true; start() }
     }
@@ -828,13 +999,13 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
-    /** 存檔後順手上傳（60 秒節流；切后台強制一次）。未登入直接跳過。 */
+    /** 存檔後順手上傳（10 秒節流；切后台強制一次）。未登入直接跳過。 */
     private fun maybeUpload(force: Boolean = false) {
         Thread {
             try {
                 val now = System.currentTimeMillis()
                 synchronized(this@MainActivity) {
-                    if (!force && now - lastUploadAt < 60000) return@Thread
+                    if (!force && now - lastUploadAt < 10000) return@Thread
                     lastUploadAt = now
                 }
                 DropboxSync.uploadLocal(applicationContext)
@@ -991,6 +1162,10 @@ class MainActivity : AppCompatActivity() {
                     currentFile?.close()
                     currentFile = f
                     currentUri = uri
+                    // 先占位：開書／還原瞬間 relayout 連帶的存檔直接跳過，
+                    // 否則 0% 或舊位置會配上新時間戳，先毒死雲端
+                    lastSavedPos = if (saved != null && (saved.lastLine > 0 || saved.lastOffset > 0))
+                        TextPos(saved.lastLine, saved.lastOffset) else TextPos(0, 0)
                     reader.openFile(f)
                     stopSpeak(false)
                     rebuildToc()
@@ -1000,6 +1175,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     openedPos = reader.currentPos()
                     openedRowTime = saved?.lastOpen ?: 0L
+                    lastSavedPos = reader.currentPos()
+                    // 開書順手同步一次：別台有新進度且你還沒翻頁，直接跳過去（靜默，只在跳轉時 Toast）
+                    if (DropboxSync.isLinked(applicationContext)) syncAfterLogin(announce = false)
                     refreshStatus()
                     refreshShelf()
                     btnOpen.isEnabled = true

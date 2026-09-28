@@ -2,10 +2,12 @@ package com.example.txtreader
 
 import android.app.Activity
 import android.content.Context
+import android.provider.Settings
 import com.dropbox.core.DbxRequestConfig
 import com.dropbox.core.android.Auth
 import com.dropbox.core.oauth.DbxCredential
 import com.dropbox.core.v2.DbxClientV2
+import com.dropbox.core.v2.files.FileMetadata
 import com.dropbox.core.v2.files.WriteMode
 
 /**
@@ -20,7 +22,15 @@ object DropboxSync {
     // 去 https://www.dropbox.com/developers/apps 建 App（Scoped Access→App folder），
     // 把 App key 貼在這裡；Manifest 裡 AuthActivity 的 scheme（db-開頭那串）同步換掉。
     const val APP_KEY = "uj9ilj9zatu2dok"
-    const val FILE_PATH = "/progress.json"
+    const val FILE_PREFIX = "progress-"
+    const val FILE_SUFFIX = ".json"
+    const val LEGACY_FILE = "/progress.json"
+
+    /** 本機在雲端的檔：每台手機寫自己獨立的一份，上傳只是覆蓋，不用先下載，不互蓋。 */
+    private fun deviceId(ctx: Context): String =
+        Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+
+    private fun ownPath(ctx: Context) = "/$FILE_PREFIX${deviceId(ctx)}$FILE_SUFFIX"
 
     data class SyncResult(val msg: String, val watched: Book?)
 
@@ -82,26 +92,34 @@ object DropboxSync {
         val dao = Db.get(appCtx).books()
         val local = dao.all()
         val api = client(appCtx)
-        val remote = download(api)
-        val merged = merge(local, remote)
+        val merged = merge(local, downloadAll(api))
         val localNames = local.map { it.name }.toHashSet()
         merged.filter { it.name in localNames }.forEach { dao.upsert(it) }
-        upload(api, Backup.export(merged))
+        writeOwn(api, appCtx, Backup.export(dao.all()))
         val watched = watchName?.let { n -> merged.find { it.name == n } }
         return SyncResult("同步完成（${merged.size} 本，Dropbox）", watched)
     }
 
-    /** 存檔後順手上傳：先下載合併再上傳超集（不能直接蓋，否則洗掉別台獨有的列）。未登入直接跳過。 */
+    /** 存檔後順手上傳：只寫自己那份，幾 KB，一次 PUT。未登入直接跳過。 */
     fun uploadLocal(ctx: Context) {
         val appCtx = ctx.applicationContext
         if (!isLinked(appCtx)) return
-        val dao = Db.get(appCtx).books()
-        val api = client(appCtx)
-        val merged = merge(dao.all(), download(api))
-        upload(api, Backup.export(merged))
+        val books = Db.get(appCtx).books().all()
+        writeOwn(client(appCtx), appCtx, Backup.export(books))
     }
 
-    /** 合併：同名書取 lastOpen 新的進度，Uri 用本機的（copy 保留）。 */
+    /**
+     * 新舊比較：0%（行號偏移都是 0）永遠輸給有進度的，不管時間戳——
+     * 剛開書的空白列不能把別台的真進度洗掉。都有進度才比時間。
+     */
+    private fun beats(a: Book, b: Book): Boolean {
+        val ap = a.lastLine > 0 || a.lastOffset > 0
+        val bp = b.lastLine > 0 || b.lastOffset > 0
+        if (ap != bp) return ap
+        return a.lastOpen > b.lastOpen
+    }
+
+    /** 合併：同名書取勝者，Uri 用本機的（copy 保留）。 */
     fun merge(local: List<Book>, remote: List<Book>): List<Book> {
         val m = LinkedHashMap<String, Book>()
         for (b in local) m[b.name] = b
@@ -109,7 +127,7 @@ object DropboxSync {
             val l = m[r.name]
             if (l == null) {
                 m[r.name] = r
-            } else if (r.lastOpen > l.lastOpen) {
+            } else if (beats(r, l)) {
                 m[r.name] = l.copy(
                     lastLine = r.lastLine,
                     lastOffset = r.lastOffset,
@@ -122,11 +140,37 @@ object DropboxSync {
         return m.values.toList()
     }
 
-    private fun download(api: DbxClientV2): List<Book> {
+    /** 讀全部裝置檔（progress-*.json）＋舊單檔（讀完刪掉，只遷移一次）。 */
+    private fun downloadAll(api: DbxClientV2): List<Book> {
+        val out = ArrayList<Book>()
+        try {
+            var res = api.files().listFolder("")
+            while (true) {
+                for (e in res.entries) {
+                    if (e is FileMetadata && e.name.startsWith(FILE_PREFIX) && e.name.endsWith(FILE_SUFFIX)) {
+                        out += downloadPath(api, "/" + e.name)
+                    }
+                }
+                if (!res.hasMore) break
+                res = api.files().listFolderContinue(res.cursor)
+            }
+        } catch (_: Exception) {
+        }
+        val legacy = downloadPath(api, LEGACY_FILE)
+        if (legacy.isNotEmpty()) {
+            out += legacy
+            try {
+                api.files().deleteV2(LEGACY_FILE)
+            } catch (_: Exception) {
+            }
+        }
+        return out
+    }
+
+    private fun downloadPath(api: DbxClientV2, path: String): List<Book> {
         return try {
-            api.files().getMetadata(FILE_PATH) ?: return emptyList()
             val out = java.io.ByteArrayOutputStream()
-            api.files().downloadBuilder(FILE_PATH).download(out)
+            api.files().downloadBuilder(path).download(out)
             val json = out.toString(Charsets.UTF_8.name())
             if (json.isBlank()) emptyList() else Backup.parse(json)
         } catch (_: Exception) {
@@ -135,8 +179,8 @@ object DropboxSync {
         }
     }
 
-    private fun upload(api: DbxClientV2, json: String) {
-        api.files().uploadBuilder(FILE_PATH)
+    private fun writeOwn(api: DbxClientV2, ctx: Context, json: String) {
+        api.files().uploadBuilder(ownPath(ctx))
             .withMode(WriteMode.OVERWRITE)
             .uploadAndFinish(json.toByteArray(Charsets.UTF_8).inputStream())
     }
