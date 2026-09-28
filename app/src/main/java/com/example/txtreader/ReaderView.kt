@@ -112,6 +112,15 @@ class ReaderView @JvmOverloads constructor(
             relayout()
         }
 
+    /** 左右對齊：段中行把右緣補齊（逐字均分），段尾行保持自然。只影響畫法，不重排。 */
+    var justifyEdges: Boolean = true
+        set(v) {
+            if (field != v) {
+                field = v
+                invalidate()
+            }
+        }
+
     /** 頁面四邊邊距（dp）。改了即時重排。 */
     var paddingDp: Float = 16f
         set(v) {
@@ -328,6 +337,33 @@ class ReaderView @JvmOverloads constructor(
         cb("檢測中（${src.size}行），請稍候…")
     }
 
+    /**
+     * 左右對齊：一段一段畫，均分多出來的寬度。
+     * 有表情符號（代理對）就退回整行畫，避免拆散字。
+     * 太滿或太空（理論上段中行不會發生）也退回整行畫，保險。
+     */
+    private fun drawJustified(canvas: Canvas, line: String, x0: Float, y: Float, maxW: Float) {
+        if (line.any { it.isSurrogate() }) {
+            canvas.drawText(line, x0, y, paint)
+            return
+        }
+        val widths = FloatArray(line.length)
+        paint.getTextWidths(line, widths)
+        val lsPx = paint.letterSpacing * paint.textSize
+        var total = lsPx * (line.length - 1)
+        for (w in widths) total += w
+        val extra = (maxW - total) / (line.length - 1)
+        if (extra < 0 || extra > paint.textSize) {
+            canvas.drawText(line, x0, y, paint)
+            return
+        }
+        var x = x0
+        for (i in line.indices) {
+            canvas.drawText(line, i, i + 1, x, y, paint)
+            x += widths[i] + lsPx + extra
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.parseColor("#121212"))
@@ -339,7 +375,12 @@ class ReaderView @JvmOverloads constructor(
             if (ttsLine >= 0 && page.origins.getOrNull(idx)?.lineIndex == ttsLine) {
                 canvas.drawRect(0f, y + fm.top, width.toFloat(), y + fm.bottom, hlPaint)
             }
-            canvas.drawText(line, pad, y, paint)
+            // 段中行＋夠長才撐滿；段尾行、空行、單字行保持自然
+            if (justifyEdges && page.paraEnd.getOrNull(idx) == false && line.length >= 2) {
+                drawJustified(canvas, line, pad, y, contentWidth())
+            } else {
+                canvas.drawText(line, pad, y, paint)
+            }
             y += lh
         }
     }

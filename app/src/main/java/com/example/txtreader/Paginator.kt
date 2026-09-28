@@ -5,12 +5,13 @@ import android.graphics.Paint
 /** 文字位置：sourceLines[lineIndex] 的第 charOffset 個字 */
 data class TextPos(val lineIndex: Int, val charOffset: Int)
 
-/** 一頁的結果：lines 是已斷好行、可直接 drawText 的字串；origins 是每行對應的原文位置（TTS 高亮用） */
+/** 一頁的結果：lines 是已斷好行、可直接 drawText 的字串；origins 是每行對應的原文位置（TTS 高亮用）；paraEnd 標示該行是不是段落最後一行（左右對齊只撐段中行） */
 data class Page(
     val lines: List<String>,
     val next: TextPos,
     val hasNext: Boolean,
-    val origins: List<TextPos> = emptyList()
+    val origins: List<TextPos> = emptyList(),
+    val paraEnd: List<Boolean> = emptyList()
 )
 
 /**
@@ -82,6 +83,7 @@ class Paginator {
         if (source.size == 0) return Page(emptyList(), TextPos(0, 0), false)
         val lines = ArrayList<String>()
         val origins = ArrayList<TextPos>()
+        val ends = ArrayList<Boolean>()
         var li = start.lineIndex.coerceIn(0, source.size - 1)
         var off = start.charOffset.coerceIn(0, source.get(li).length)
         var usedPx = 0f
@@ -113,10 +115,11 @@ class Paginator {
                 if (lines.isNotEmpty() && usedPx + lineHeightPx > maxHeightPx + 0.5f) {
                     val consumed = broken.subList(0, bi).sumOf { it.length }
                     val nextOff = if (consumed == 0) off else off + consumed - ind
-                    return Page(lines.toList(), TextPos(li, nextOff), true, origins.toList())
+                    return Page(lines.toList(), TextPos(li, nextOff), true, origins.toList(), ends.toList())
                 }
                 lines.add(b)
                 origins.add(TextPos(li, segOff))
+                ends.add(bi == broken.size - 1)
                 segOff += b.length - if (firstPiece) ind else 0
                 firstPiece = false
                 usedPx += lineHeightPx
@@ -126,6 +129,6 @@ class Paginator {
             usedPx += paraGapPx
         }
         val hasNext = li < source.size
-        return Page(lines.toList(), TextPos(li.coerceAtMost(maxOf(0, source.size - 1)), 0), hasNext, origins.toList())
+        return Page(lines.toList(), TextPos(li.coerceAtMost(maxOf(0, source.size - 1)), 0), hasNext, origins.toList(), ends.toList())
     }
 }

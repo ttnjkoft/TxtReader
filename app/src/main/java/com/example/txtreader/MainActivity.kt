@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity() {
         reader.paddingDp = prefs.getFloat("paddingDp", 16f)
         reader.firstLineIndent = prefs.getBoolean("indent", true)
         reader.paragraphGapDp = prefs.getFloat("gapDp", 8f)
+        reader.justifyEdges = prefs.getBoolean("justify", true)
         reader.textColor = prefs.getInt("textColor", Color.parseColor("#FFFFFF"))
         // 自選字型：內部拷貝還在就套用，不在就靜靜用系統預設
         prefs.getString("fontPath", null)?.let { p ->
@@ -498,6 +499,7 @@ class MainActivity : AppCompatActivity() {
             .putFloat("paddingDp", reader.paddingDp)
             .putBoolean("indent", reader.firstLineIndent)
             .putFloat("gapDp", reader.paragraphGapDp)
+            .putBoolean("justify", reader.justifyEdges)
             .apply()
     }
 
@@ -572,6 +574,13 @@ class MainActivity : AppCompatActivity() {
         root.addView(indentBox)
         root.addView(gapLabel)
         root.addView(gapBar)
+        val justifyBox = CheckBox(this).apply {
+            text = "左右對齊（右緣補齊）"
+            isChecked = reader.justifyEdges
+            setTextColor(Color.parseColor("#E0E0E0"))
+        }
+        justifyBox.setOnCheckedChangeListener { _, checked -> reader.justifyEdges = checked }
+        root.addView(justifyBox)
         root.addView(label("字色"))
         val colors = intArrayOf(
             Color.parseColor("#FFFFFF"),
