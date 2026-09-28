@@ -1,6 +1,6 @@
 {
-    "versionCode":  2,
-    "versionName":  "1.0.1",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.0.1/TxtReader.apk",
-    "notes":  "測試發版流程：左右對齊+發版腳本驗證"
+    "versionCode":  3,
+    "versionName":  "1.1.0",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.1.0/TxtReader.apk",
+    "notes":  "Dropbox同步取代Drive；常亮螢幕"
 }

@@ -27,8 +27,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 
 /**
  * Phase 0-5 主畫面：程式碼排版面，不寫 XML。
@@ -81,13 +79,6 @@ class MainActivity : AppCompatActivity() {
         }
     private val importDoc = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) doImport(uri)
-    }
-    private val googleSign = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == RESULT_OK) syncAfterLogin()
-        else Toast.makeText(this, "Google 登入取消", Toast.LENGTH_SHORT).show()
-    }
-    private val driveAuth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == RESULT_OK) syncAfterLogin()
     }
     private val fontPick = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) copyFont(uri)
@@ -776,34 +767,31 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
-    // ---------- Google Drive 同步 ----------
+    // ---------- Dropbox 同步 ----------
 
     private fun onSyncButton() {
-        if (DriveSync.lastAccount(this) != null) syncAfterLogin()
+        if (DropboxSync.isLinked(this)) syncAfterLogin()
         else {
-            Toast.makeText(this, "先登入 Google", Toast.LENGTH_SHORT).show()
-            googleSign.launch(GoogleSignIn.getClient(this, DriveSync.signInOptions()).signInIntent)
+            Toast.makeText(this, "開啟瀏覽器登入 Dropbox（一次就好）", Toast.LENGTH_SHORT).show()
+            DropboxSync.beginAuth(this)
         }
     }
 
-    /** 手動同步＋授權回來重試的統一入口（一定走背景線程）。 */
+    /** 手動同步的統一入口（一定走背景線程；瀏覽器授權回來走 onResume）。 */
     private fun syncAfterLogin() {
         Thread {
             try {
-                val r = DriveSync.syncNow(applicationContext, currentFile?.name)
+                val r = DropboxSync.syncNow(applicationContext, currentFile?.name)
                 runOnUiThread {
                     Toast.makeText(this, r.msg, Toast.LENGTH_SHORT).show()
                     refreshShelf()
                     refreshStatus()
                     applyWatched(r.watched)
                 }
-            } catch (e: UserRecoverableAuthIOException) {
-                // 第一次要使用者按允許（drive.appdata 授權頁）
-                try {
-                    driveAuth.launch(e.intent)
-                } catch (_: Exception) {
-                    runOnUiThread { Toast.makeText(this, "需要授權 Drive 存取", Toast.LENGTH_LONG).show() }
-                }
+            } catch (e: com.dropbox.core.InvalidAccessTokenException) {
+                // token 被使用者在網頁端收回等：清掉，下次重登
+                DropboxSync.unlink(applicationContext)
+                runOnUiThread { Toast.makeText(this, "授權失效，請重按同步登入", Toast.LENGTH_LONG).show() }
             } catch (e: Exception) {
                 runOnUiThread { Toast.makeText(this, "同步失敗：${e.message}", Toast.LENGTH_LONG).show() }
             }
@@ -828,8 +816,8 @@ class MainActivity : AppCompatActivity() {
     private fun autoSyncOnStart() {
         Thread {
             try {
-                if (DriveSync.lastAccount(applicationContext) == null) return@Thread
-                val r = DriveSync.syncNow(applicationContext, currentFile?.name)
+                if (!DropboxSync.isLinked(applicationContext)) return@Thread
+                val r = DropboxSync.syncNow(applicationContext, currentFile?.name)
                 runOnUiThread {
                     refreshShelf()
                     refreshStatus()
@@ -849,7 +837,7 @@ class MainActivity : AppCompatActivity() {
                     if (!force && now - lastUploadAt < 60000) return@Thread
                     lastUploadAt = now
                 }
-                DriveSync.uploadLocal(applicationContext)
+                DropboxSync.uploadLocal(applicationContext)
             } catch (_: Exception) {
             }
         }.apply { isDaemon = true; start() }
@@ -1026,6 +1014,15 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.apply { isDaemon = true; start() }
+    }
+
+    /** 瀏覽器授權回來落地在這：有新憑證就存下並同步一次（沒登入／舊憑證直接跳過）。 */
+    override fun onResume() {
+        super.onResume()
+        try {
+            if (DropboxSync.finishAuth(this)) syncAfterLogin()
+        } catch (_: Exception) {
+        }
     }
 
     override fun onPause() {

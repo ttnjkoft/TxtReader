@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.txtreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.1.0"
     }
 
     signingConfigs {
@@ -55,15 +55,9 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
-    // Phase 7：Google 登入＋Drive REST（版本已對過 POM／release notes，別亂升）
-    // httpclient 在 Android 用不到（走 HttpURLConnection），源頭排除免得 META-INF 打架
-    implementation("com.google.android.gms:play-services-auth:21.6.0")
-    implementation("com.google.apis:google-api-services-drive:v3-rev20260712-2.0.0") {
-        exclude(group = "org.apache.httpcomponents")
-    }
-    implementation("com.google.api-client:google-api-client-android:2.7.2") {
-        exclude(group = "org.apache.httpcomponents")
-    }
+    // Dropbox 同步（官方 SDK：core＋android；要 compileSdk 36 的 8.x 用不了，退 7.x 最新版）
+    implementation("com.dropbox.core:dropbox-core-sdk:7.0.0")
+    implementation("com.dropbox.core:dropbox-android-sdk:7.0.0")
 }
 
 // 產物檔名：release 輸出叫 TxtReader.apk（不用每次找 app-release.apk）
