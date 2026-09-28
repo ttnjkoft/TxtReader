@@ -13,6 +13,9 @@ local.properties
 *.jks
 *.keystore
 gradle.properties
+# 發版腳本的 token 和暫存備份不進版控
+github-token.txt
+*.bak
 
 # APK/AAB 是產物不進版控（要裝去本機 build）
 *.apk
