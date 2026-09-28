@@ -65,6 +65,12 @@ object S2T {
             }
         }
         synchronized(this) {
+            // 台灣用字覆寫：官方 s2t 把「吃」轉成「喫」（含詞組如吃飯→喫飯），
+            // 台灣不用喫——把所有值裡的喫換回吃，key 不動。這裡集中處理，
+            // 以後還有類似的字（回報制），加一行 replace 意圖最清楚。
+            for (e in map.entries) {
+                if ('喫' in e.value) e.setValue(e.value.replace('喫', '吃'))
+            }
             dict = map
             singleChars = singles
             maxLen = mLen

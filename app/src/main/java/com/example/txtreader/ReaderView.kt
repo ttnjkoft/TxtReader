@@ -98,6 +98,20 @@ class ReaderView @JvmOverloads constructor(
             relayout()
         }
 
+    /** 段首空兩格（預設開，靜讀味）。關掉就是頂格。 */
+    var firstLineIndent: Boolean = true
+        set(v) {
+            field = v
+            relayout()
+        }
+
+    /** 段間距（dp，預設 8）。0 = 緊貼，越大呼吸感越強。 */
+    var paragraphGapDp: Float = 8f
+        set(v) {
+            field = v
+            relayout()
+        }
+
     /** 頁面四邊邊距（dp）。改了即時重排。 */
     var paddingDp: Float = 16f
         set(v) {
@@ -201,19 +215,17 @@ class ReaderView @JvmOverloads constructor(
         return max(100f, width - pad * 2)
     }
 
-    private fun linesPerPage(): Int {
-        val pad = padPx()
-        val avail = max(100f, height - pad * 2)
-        val lh = paint.fontSpacing + lineSpacingExtraPx
-        return max(1, (avail / lh).toInt())
-    }
-
     private fun relayout() {
         if (width == 0 || height == 0) {
             invalidate()
             return
         }
-        page = paginator.layoutPage(lines, current, paint, contentWidth(), linesPerPage())
+        val lh = paint.fontSpacing + lineSpacingExtraPx
+        val availH = max(100f, height - padPx() * 2)
+        page = paginator.layoutPage(
+            lines, current, paint, contentWidth(), lh, availH,
+            paragraphGapDp * resources.displayMetrics.density, firstLineIndent
+        )
         onProgress?.invoke(current.lineIndex, lines.size)
         invalidate()
     }
@@ -276,7 +288,10 @@ class ReaderView @JvmOverloads constructor(
         }
         val snapPaint = Paint(paint) // 快照，避免檢測時使用者改字體造成誤報
         val w = contentWidth()
-        val lpp = linesPerPage()
+        val lh = snapPaint.fontSpacing + lineSpacingExtraPx
+        val availH = max(100f, height - padPx() * 2)
+        val gapPx = paragraphGapDp * resources.displayMetrics.density
+        val ind = firstLineIndent
         val src = lines
         Thread {
             try {
@@ -293,7 +308,7 @@ class ReaderView @JvmOverloads constructor(
                 var pages = 0
                 var dlines = 0
                 while (true) {
-                    val p = pg.layoutPage(src, pos, snapPaint, w, lpp)
+                    val p = pg.layoutPage(src, pos, snapPaint, w, lh, availH, gapPx, ind)
                     pages++
                     dlines += p.lines.size
                     if (!p.hasNext) break

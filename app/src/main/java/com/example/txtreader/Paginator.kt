@@ -63,48 +63,67 @@ class Paginator {
 
     /**
      * 從 start 排出一頁。只排可見這一頁，微秒級。
+     * 像素預算制：每顯示行扣 lineHeightPx，每段排完扣 paraGapPx。
+     * 段首縮排：非空段從行首開始時，前綴兩個全形空白一起量寬；
+     * 若首行被禁則擠到只剩縮排（極窄螢幕），整段不縮排——否則下一頁會重複顯示那行。
      * @param source 原始行（按 \n 切，未斷行）
-     * @param paint 已設定好 textSize
+     * @param paint 已設定好 textSize（含字型／字距）
      */
-    fun layoutPage(
-        sourceLines: List<String>,
-        start: TextPos,
-        paint: Paint,
-        maxWidth: Float,
-        linesPerPage: Int
-    ): Page = layoutPage(ListSource(sourceLines), start, paint, maxWidth, linesPerPage)
-
-    /** 同上，只是行來源換成抽象（TxtFile 直接吃 mmap 惰性解碼）。 */
     fun layoutPage(
         source: LineSource,
         start: TextPos,
         paint: Paint,
         maxWidth: Float,
-        linesPerPage: Int
+        lineHeightPx: Float,
+        maxHeightPx: Float,
+        paraGapPx: Float,
+        indent: Boolean = true
     ): Page {
         if (source.size == 0) return Page(emptyList(), TextPos(0, 0), false)
-        val lines = ArrayList<String>(linesPerPage)
-        val origins = ArrayList<TextPos>(linesPerPage)
+        val lines = ArrayList<String>()
+        val origins = ArrayList<TextPos>()
         var li = start.lineIndex.coerceIn(0, source.size - 1)
         var off = start.charOffset.coerceIn(0, source.get(li).length)
+        var usedPx = 0f
 
-        while (lines.size < linesPerPage && li < source.size) {
+        while (li < source.size) {
             val para = source.get(li)
-            // 該段從 off 開始斷行
-            val broken = if (off >= para.length) listOf("") else breakParagraph(para.substring(off), paint, maxWidth)
+            var ind = 0
+            val broken: List<String>
+            if (off >= para.length) {
+                broken = listOf("")
+            } else {
+                val raw = para.substring(off)
+                if (indent && off == 0 && raw.isNotBlank()) {
+                    val withInd = breakParagraph("　　$raw", paint, maxWidth)
+                    if (withInd.size > 1 && withInd[0].length <= 2) {
+                        broken = breakParagraph(raw, paint, maxWidth)
+                    } else {
+                        broken = withInd
+                        ind = 2
+                    }
+                } else {
+                    broken = breakParagraph(raw, paint, maxWidth)
+                }
+            }
             var segOff = off
+            var firstPiece = true
             for ((bi, b) in broken.withIndex()) {
-                if (lines.size >= linesPerPage) {
-                    // 這一頁裝不下了：記住段內斷點（用 index 累加，不用 indexOf，避免重複行算錯）
+                // 空頁時第一行無條件收（再矮的畫面至少顯示一行，不卡死）
+                if (lines.isNotEmpty() && usedPx + lineHeightPx > maxHeightPx + 0.5f) {
                     val consumed = broken.subList(0, bi).sumOf { it.length }
-                    return Page(lines.toList(), TextPos(li, off + consumed), true, origins.toList())
+                    val nextOff = if (consumed == 0) off else off + consumed - ind
+                    return Page(lines.toList(), TextPos(li, nextOff), true, origins.toList())
                 }
                 lines.add(b)
                 origins.add(TextPos(li, segOff))
-                segOff += b.length
+                segOff += b.length - if (firstPiece) ind else 0
+                firstPiece = false
+                usedPx += lineHeightPx
             }
             li++
             off = 0
+            usedPx += paraGapPx
         }
         val hasNext = li < source.size
         return Page(lines.toList(), TextPos(li.coerceAtMost(maxOf(0, source.size - 1)), 0), hasNext, origins.toList())

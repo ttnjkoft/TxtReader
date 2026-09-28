@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -99,6 +100,8 @@ class MainActivity : AppCompatActivity() {
         reader.lineSpacingExtraPx = prefs.getFloat("linePx", 8f * resources.displayMetrics.density)
         reader.letterSpacingEm = prefs.getFloat("letterEm", 0f)
         reader.paddingDp = prefs.getFloat("paddingDp", 16f)
+        reader.firstLineIndent = prefs.getBoolean("indent", true)
+        reader.paragraphGapDp = prefs.getFloat("gapDp", 8f)
         reader.textColor = prefs.getInt("textColor", Color.parseColor("#FFFFFF"))
         // 自選字型：內部拷貝還在就套用，不在就靜靜用系統預設
         prefs.getString("fontPath", null)?.let { p ->
@@ -491,6 +494,8 @@ class MainActivity : AppCompatActivity() {
             .putFloat("letterEm", reader.letterSpacingEm)
             .putInt("textColor", reader.textColor)
             .putFloat("paddingDp", reader.paddingDp)
+            .putBoolean("indent", reader.firstLineIndent)
+            .putFloat("gapDp", reader.paragraphGapDp)
             .apply()
     }
 
@@ -522,15 +527,22 @@ class MainActivity : AppCompatActivity() {
             max = 48
             progress = reader.paddingDp.toInt().coerceIn(0, 48)
         }
+        val gapLabel = label("")
+        val gapBar = SeekBar(this).apply {
+            max = 30
+            progress = reader.paragraphGapDp.toInt().coerceIn(0, 30)
+        }
         fun refreshLabels() {
             lineLabel.text = "行距：${lineBar.progress}dp"
             letterLabel.text = "字距：${"%.2f".format(letterBar.progress / 50f)}em"
             marginLabel.text = "邊界：${marginBar.progress}dp"
+            gapLabel.text = "段間距：${gapBar.progress}dp"
         }
         val seekListener = object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
                 if (s === lineBar) reader.lineSpacingExtraPx = p * den
                 else if (s === marginBar) reader.paddingDp = p.toFloat()
+                else if (s === gapBar) reader.paragraphGapDp = p.toFloat()
                 else reader.letterSpacingEm = p / 50f
                 refreshLabels()
             }
@@ -541,6 +553,7 @@ class MainActivity : AppCompatActivity() {
         lineBar.setOnSeekBarChangeListener(seekListener)
         letterBar.setOnSeekBarChangeListener(seekListener)
         marginBar.setOnSeekBarChangeListener(seekListener)
+        gapBar.setOnSeekBarChangeListener(seekListener)
         refreshLabels()
         root.addView(lineLabel)
         root.addView(lineBar)
@@ -548,6 +561,15 @@ class MainActivity : AppCompatActivity() {
         root.addView(letterBar)
         root.addView(marginLabel)
         root.addView(marginBar)
+        val indentBox = CheckBox(this).apply {
+            text = "段首空兩格"
+            isChecked = reader.firstLineIndent
+            setTextColor(Color.parseColor("#E0E0E0"))
+        }
+        indentBox.setOnCheckedChangeListener { _, checked -> reader.firstLineIndent = checked }
+        root.addView(indentBox)
+        root.addView(gapLabel)
+        root.addView(gapBar)
         root.addView(label("字色"))
         val colors = intArrayOf(
             Color.parseColor("#FFFFFF"),
