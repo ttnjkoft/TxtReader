@@ -152,6 +152,8 @@ class ReaderView @JvmOverloads constructor(
     init {
         // 行距預設 8dp（之前寫死 12px，在高密度螢幕上只有約 4dp 太擠）
         lineSpacingExtraPx = 14f * resources.displayMetrics.density
+        // 閱讀時螢幕常亮（View 層級，離開 APP 自動恢復，不用權限）
+        keepScreenOn = true
         applyTextSize()
         isClickable = true
         isFocusable = true

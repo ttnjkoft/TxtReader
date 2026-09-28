@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.SeekBar
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -394,6 +395,7 @@ class MainActivity : AppCompatActivity() {
             }
         }.apply { isDaemon = true; start() }
         autoSyncOnStart()
+        checkForUpdate()
     }
 
     /** 在「目前顯示的目錄」（真實或虛擬）裡二分查找第 line 行屬於哪一章 */
@@ -607,15 +609,20 @@ class MainActivity : AppCompatActivity() {
         fontRow.addView(btnPickFont, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         fontRow.addView(btnDefFont, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(fontRow)
-        AlertDialog.Builder(this)
+        lateinit var settingDlg: AlertDialog
+        val btnCheckUpdate = Button(this).apply { text = "檢查更新" }
+        btnCheckUpdate.setOnClickListener {
+            settingDlg.dismiss()
+            checkForUpdate(manual = true)
+        }
+        root.addView(btnCheckUpdate)
+        settingDlg = AlertDialog.Builder(this)
             .setTitle("顯示設定")
             .setView(root)
             .setPositiveButton("完成", null)
             .create()
-            .apply {
-                setOnDismissListener { saveSettings() }
-                show()
-            }
+        settingDlg.setOnDismissListener { saveSettings() }
+        settingDlg.show()
     }
 
     /** 字型檔：第一次拷貝到內部存著（以後不用再選），套用＋記名。只收 ttf/otf/ttc。 */
@@ -837,6 +844,79 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
             }
         }.apply { isDaemon = true; start() }
+    }
+
+    // ---------- 自動更新 ----------
+
+    /** 啟動靜默檢查（24 小時一次）；manual=true 一定給結果。 */
+    private fun checkForUpdate(manual: Boolean = false) {
+        Thread {
+            try {
+                val now = System.currentTimeMillis()
+                if (!manual && now - prefs.getLong("lastUpdateCheck", 0L) < 24L * 3600 * 1000) {
+                    return@Thread
+                }
+                prefs.edit().putLong("lastUpdateCheck", now).apply()
+                val remote = UpdateChecker.check(applicationContext) ?: run {
+                    if (manual) runOnUiThread { Toast.makeText(this, "已是最新版", Toast.LENGTH_SHORT).show() }
+                    return@Thread
+                }
+                runOnUiThread { showUpdateDialog(remote) }
+            } catch (_: Exception) {
+                if (manual) runOnUiThread { Toast.makeText(this, "檢查失敗（網路？）", Toast.LENGTH_SHORT).show() }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun showUpdateDialog(remote: UpdateChecker.Remote) {
+        AlertDialog.Builder(this)
+            .setTitle("發現新版 v${remote.versionName}")
+            .setMessage(remote.notes.ifBlank { "建議更新" })
+            .setPositiveButton("立即更新") { _, _ -> downloadAndInstall(remote) }
+            .setNegativeButton("稍後", null)
+            .show()
+    }
+
+    private fun downloadAndInstall(remote: UpdateChecker.Remote) {
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            val p = (16 * resources.displayMetrics.density).toInt()
+            setPadding(p, p, p, p)
+        }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("下載更新中…")
+            .setView(bar)
+            .setNegativeButton("取消") { _, _ -> UpdateChecker.cancel() }
+            .setCancelable(false)
+            .show()
+        Thread {
+            try {
+                val apk = UpdateChecker.download(applicationContext, remote.apkUrl) { done, total ->
+                    if (total > 0) runOnUiThread { bar.progress = (done * 100 / total).toInt() }
+                }
+                runOnUiThread {
+                    dlg.dismiss()
+                    installApk(apk)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    dlg.dismiss()
+                    Toast.makeText(this, "下載失敗：${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun installApk(apk: java.io.File) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            this, "$packageName.fileprovider", apk
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(intent)
     }
 
     // ---------- 開檔 ----------

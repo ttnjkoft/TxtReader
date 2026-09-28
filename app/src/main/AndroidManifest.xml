@@ -4,6 +4,8 @@
     <!-- Phase 7：Google Drive 同步要上網 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 自動更新：調起系統安裝器裝下載的 APK（每支手機開一次未知來源即可） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:allowBackup="true"
         android:label="TxtReader"
@@ -19,5 +21,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 自動更新：把快取裡的 APK 交給系統安裝器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.example.txtreader.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
     </application>
 </manifest>

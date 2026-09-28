@@ -1,0 +1,5 @@
+gradlew.bat assembleRelease   # 出正式版（簽過名，TxtReader.apk）← 你一直在用的
+gradlew.bat assembleDebug     # 出測試版（debug 簽名，測功能用）
+gradlew.bat installDebug      # 測試版直接裝到手機（Studio 按 Run 等效，不用手動複製）
+gradlew.bat clean             # 清掉 build，怪問題先跑這個再 build
+gradlew.bat --version         # 看 Gradle 版本（出錯回報時用）

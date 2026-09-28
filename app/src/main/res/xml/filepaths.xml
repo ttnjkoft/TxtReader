@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自動更新：只暴露快取裡的 updates/ 給安裝器 -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
