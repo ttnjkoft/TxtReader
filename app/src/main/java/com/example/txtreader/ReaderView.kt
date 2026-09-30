@@ -15,7 +15,7 @@ import kotlin.math.max
 /**
  * Phase 0/1 自繪閱讀 View：Canvas.drawText，只排可見頁。
  * 行來源是抽象：範例文字走 ListSource，開檔走 TxtFile(mmap 惰性解碼)。
- * 手勢：點上 40% 上一頁，點下 40% 下一頁，點中間開關選單；上下滑也翻頁；長按跑丟字自我檢測。
+ * 手勢：點上 3 成上一頁，點下 3 成下一頁，點中間 4 成開關選單；上下滑也翻頁；長按跑丟字自我檢測。
  */
 class ReaderView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
@@ -132,11 +132,11 @@ class ReaderView @JvmOverloads constructor(
 
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            // 上 40% 上一頁，下 40% 下一頁，中間 20% 開關選單
+            // 上 30% 上一頁，下 30% 下一頁，中間 40% 開關選單（中間太窄容易誤觸翻頁）
             val h = height.toFloat()
             when {
-                e.y < h * 0.4f -> prevPage()
-                e.y > h * 0.6f -> nextPage()
+                e.y < h * 0.3f -> prevPage()
+                e.y > h * 0.7f -> nextPage()
                 else -> onToggleMenu?.invoke()
             }
             return true

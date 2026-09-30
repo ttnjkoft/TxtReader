@@ -366,6 +366,8 @@ class MainActivity : AppCompatActivity() {
         speaker.onMediaToggle = { toggleSpeak() }
         speaker.onAutoPaused = { btnSpeak.text = "繼續" }
         speaker.onAutoResumed = { btnSpeak.text = "暫停" }
+        speaker.speechRate = prefs.getFloat("speechRate", 1f)
+        speaker.pitch = prefs.getFloat("pitch", 1f)
         speaker.init()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -497,6 +499,8 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("indent", reader.firstLineIndent)
             .putFloat("gapDp", reader.paragraphGapDp)
             .putBoolean("justify", reader.justifyEdges)
+            .putFloat("speechRate", speaker.speechRate)
+            .putFloat("pitch", speaker.pitch)
             .apply()
     }
 
@@ -533,28 +537,49 @@ class MainActivity : AppCompatActivity() {
             max = 30
             progress = reader.paragraphGapDp.toInt().coerceIn(0, 30)
         }
+        val rateLabel = label("")
+        val rateBar = SeekBar(this).apply {
+            max = 150
+            progress = ((speaker.speechRate * 100).toInt() - 50).coerceIn(0, 150)
+        }
+        val pitchLabel = label("")
+        val pitchBar = SeekBar(this).apply {
+            max = 150
+            progress = ((speaker.pitch * 100).toInt() - 50).coerceIn(0, 150)
+        }
         fun refreshLabels() {
             lineLabel.text = "行距：${lineBar.progress}dp"
             letterLabel.text = "字距：${"%.2f".format(letterBar.progress / 50f)}em"
             marginLabel.text = "邊界：${marginBar.progress}dp"
             gapLabel.text = "段間距：${gapBar.progress}dp"
+            rateLabel.text = "語速：${rateBar.progress + 50}%"
+            pitchLabel.text = "聲調：${pitchBar.progress + 50}%"
         }
         val seekListener = object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
                 if (s === lineBar) reader.lineSpacingExtraPx = p * den
                 else if (s === marginBar) reader.paddingDp = p.toFloat()
                 else if (s === gapBar) reader.paragraphGapDp = p.toFloat()
+                else if (s === rateBar) speaker.speechRate = (p + 50) / 100f
+                else if (s === pitchBar) speaker.pitch = (p + 50) / 100f
                 else reader.letterSpacingEm = p / 50f
                 refreshLabels()
             }
 
             override fun onStartTrackingTouch(s: SeekBar) {}
-            override fun onStopTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {
+                // 語速聲調放開手指播一句試聽；正在念書就不插播（下一句直接生效）
+                if ((s === rateBar || s === pitchBar) && !speaker.isPlaying()) {
+                    speaker.speakPreview("這是語速測試，讀書真好。")
+                }
+            }
         }
         lineBar.setOnSeekBarChangeListener(seekListener)
         letterBar.setOnSeekBarChangeListener(seekListener)
         marginBar.setOnSeekBarChangeListener(seekListener)
         gapBar.setOnSeekBarChangeListener(seekListener)
+        rateBar.setOnSeekBarChangeListener(seekListener)
+        pitchBar.setOnSeekBarChangeListener(seekListener)
         refreshLabels()
         root.addView(lineLabel)
         root.addView(lineBar)
@@ -571,6 +596,10 @@ class MainActivity : AppCompatActivity() {
         root.addView(indentBox)
         root.addView(gapLabel)
         root.addView(gapBar)
+        root.addView(rateLabel)
+        root.addView(rateBar)
+        root.addView(pitchLabel)
+        root.addView(pitchBar)
         val justifyBox = CheckBox(this).apply {
             text = "左右對齊（右緣補齊）"
             isChecked = reader.justifyEdges

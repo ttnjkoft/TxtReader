@@ -54,6 +54,26 @@ class Speaker(
     /** 短暫失去重拿回來自動繼續時通知 Activity 改按鈕字。 */
     var onAutoResumed: (() -> Unit)? = null
 
+    /** 語速（1.0 正常；各家引擎上限不同，太離譜會被引擎打回）。改了下一句生效。 */
+    var speechRate: Float = 1f
+        set(v) {
+            field = v.coerceIn(0.25f, 4f)
+            try {
+                tts?.setSpeechRate(field)
+            } catch (_: Exception) {
+            }
+        }
+
+    /** 聲調（1.0 正常）。改了下一句生效。 */
+    var pitch: Float = 1f
+        set(v) {
+            field = v.coerceIn(0.5f, 2f)
+            try {
+                tts?.setPitch(field)
+            } catch (_: Exception) {
+            }
+        }
+
     fun isPlaying(): Boolean = playing
 
     fun lastSpoken(): Int = speaking
@@ -131,6 +151,11 @@ class Speaker(
             return
         }
         requestFocus()
+        try {
+            tts?.setSpeechRate(speechRate)
+            tts?.setPitch(pitch)
+        } catch (_: Exception) {
+        }
         tts?.stop()
         queued = 0
         speaking = -1
@@ -166,6 +191,17 @@ class Speaker(
         abandonFocus()
     }
 
+    /** 設定頁試聽：不動正片佇列，直接插播一句。沒在播才呼叫（呼叫方保證）。 */
+    fun speakPreview(text: String) {
+        if (!engineReady) return
+        try {
+            tts?.setSpeechRate(speechRate)
+            tts?.setPitch(pitch)
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "preview")
+        } catch (_: Exception) {
+        }
+    }
+
     /** 播完一句補一句，保持約 30 句緩衝。超長單行切塊（引擎單句上線 ~4000 字）。 */
     private fun topUp() {
         val src = source() ?: return
@@ -177,7 +213,8 @@ class Speaker(
             } catch (_: Exception) {
                 ""
             }
-            if (text.isNotEmpty()) {
+            // 裝飾行（整行標點符號，如 =====、……、※※※）直接跳過不念；章節標題有字會照念
+            if (text.isNotEmpty() && text.any { it.isLetterOrDigit() }) {
                 if (text.length <= 3900) {
                     if (t.speak(text, TextToSpeech.QUEUE_ADD, null, "t_$n") == TextToSpeech.SUCCESS) {
                         queued++

@@ -1,6 +1,6 @@
 {
-    "versionCode":  4,
-    "versionName":  "1.2.0",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.2.0/TxtReader.apk",
-    "notes":  "台灣用語第二層；全文搜尋；同步借屍還魂修正"
+    "versionCode":  5,
+    "versionName":  "1.3.0",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.3.0/TxtReader.apk",
+    "notes":  "TTS語速聲調加試聽；跳過裝飾行；選單區放大"
 }
