@@ -16,6 +16,10 @@ gradle.properties
 # 發版腳本的 token 和暫存備份不進版控
 github-token.txt
 *.bak
+# 壓縮檔一律不進版控（key 的 rar 備份曾經被掃進去過，絕不再犯）
+*.rar
+*.zip
+*.7z
 
 # APK/AAB 是產物不進版控（要裝去本機 build）
 *.apk
