@@ -1,10 +1,19 @@
 package com.example.txtreader
 
+import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.app.PendingIntent
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -44,6 +53,32 @@ class Speaker(
     private var session: MediaSession? = null
     private var audio: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var noisyReceiver: BroadcastReceiver? = null
+
+    /** 播放狀態＋保持 session 活躍：暫停也不關，這樣耳機才能按繼續。 */
+    private fun updateState(playing: Boolean) {
+        try {
+            val s = session ?: return
+            val state = if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+            s.setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(
+                        PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_STOP or PlaybackState.ACTION_PLAY_PAUSE
+                    )
+                    .setState(state, 0L, 1f)
+                    .build()
+            )
+            s.isActive = true
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 給 MediaButtonReceiver 呼叫（同進程靜態，免綁定；Activity 啟動時掛上，銷毀時清掉）。 */
+    companion object {
+        var onExternalToggle: (() -> Unit)? = null
+        var onExternalStop: (() -> Unit)? = null
+    }
 
     /** 耳機／藍牙播放暫停鍵的回調（Activity 切開關）。 */
     var onMediaToggle: (() -> Unit)? = null
@@ -76,11 +111,124 @@ class Speaker(
 
     fun isPlaying(): Boolean = playing
 
+    private val channelId = "tts_playback"
+
+    /** 通知列控制：播／暫停各一個直達按鈕（不經媒體鍵派送，保證能按）。失敗不影響播音。 */
+    private fun toggleIntent(): PendingIntent {
+        return PendingIntent.getBroadcast(
+            appCtx, 0,
+            Intent(appCtx, MediaButtonReceiver::class.java).setAction(MediaButtonReceiver.ACTION_TOGGLE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun stopIntent(): PendingIntent {
+        return PendingIntent.getBroadcast(
+            appCtx, 1,
+            Intent(appCtx, MediaButtonReceiver::class.java).setAction(MediaButtonReceiver.ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun ensureChannel() {
+        try {
+            val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            if (mgr.getNotificationChannel(channelId) == null) {
+                mgr.createNotificationChannel(
+                    NotificationChannel(channelId, "朗讀控制", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showNotification(playing: Boolean, text: String?) {
+        try {
+            ensureChannel()
+            val style = Notification.MediaStyle()
+            // 摺疊視圖兩個鈕都顯示，不然三星只給第一個
+            style.setShowActionsInCompactView(0, 1)
+            try {
+                session?.let { style.setMediaSession(it.sessionToken) }
+            } catch (_: Exception) {
+            }
+            val icon = if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+            val nb = Notification.Builder(appCtx, channelId)
+                .setSmallIcon(icon)
+                .setContentTitle("TxtReader" + if (playing) "朗讀中" else "已暫停")
+                .setContentText(text ?: if (playing) "點暫停停止" else "點繼續")
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        appCtx, 0,
+                        appCtx.packageManager.getLaunchIntentForPackage(appCtx.packageName),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
+                .addAction(icon, if (playing) "暫停" else "繼續", toggleIntent())
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", stopIntent())
+                .setStyle(style)
+                // 播才常駐；暫停可滑掉，滑掉＝停止（三星會收進媒體面板，滑掉照樣停）
+                .setOngoing(playing)
+                .setDeleteIntent(stopIntent())
+                .setOnlyAlertOnce(true)
+            (appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.notify(1, nb.build())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun updateNotifText(line: Int) {
+        if (!playing || line < 0) return
+        val t = try {
+            source()?.get(line)?.trim()?.take(60)
+        } catch (_: Exception) {
+            null
+        }
+        showNotification(true, t?.ifBlank { null })
+    }
+
+    private fun cancelNotification() {
+        try {
+            (appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(1)
+        } catch (_: Exception) {
+        }
+    }
+
     fun lastSpoken(): Int = speaking
 
+    @Suppress("DEPRECATION")
     fun init() {
         audio = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        // 舊式搶鍵：直接登記為媒體鍵接收器，覆寫殭屍記錄（已解除安裝的播放器殘留）。
+        // 三星認這套，比 MediaSession 回調還優先。
+        try {
+            audio?.registerMediaButtonEventReceiver(
+                ComponentName(appCtx, MediaButtonReceiver::class.java)
+            )
+        } catch (_: Exception) {
+        }
+        // 拔耳機／藍牙斷線自動暫停
+        noisyReceiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: Intent) {
+                if (AudioManager.ACTION_AUDIO_BECOMING_NOISY == intent.action && playing) {
+                    pause()
+                    main.post { onAutoPaused?.invoke() }
+                }
+            }
+        }.also {
+            try {
+                appCtx.registerReceiver(it, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+            } catch (_: Exception) {
+                noisyReceiver = null
+            }
+        }
         session = MediaSession(appCtx, "TxtReader").apply {
+            // 明說要收媒體鍵＋傳輸控制：部分手機（三星）預設不給，不寫就收不到耳機事件
+            setFlags(
+                MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() {
                     main.post { onMediaToggle?.invoke() }
@@ -94,6 +242,16 @@ class Speaker(
                     main.post { onMediaToggle?.invoke() }
                 }
             })
+        }
+        // 舊式通道也指過來：系統按顯式 Receiver 派送（三星认这个）
+        try {
+            val pi = PendingIntent.getBroadcast(
+                appCtx, 0,
+                Intent(appCtx, MediaButtonReceiver::class.java).setAction(Intent.ACTION_MEDIA_BUTTON),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            session?.setMediaButtonReceiver(pi)
+        } catch (_: Exception) {
         }
         tts = TextToSpeech(appCtx) { st ->
             if (st != TextToSpeech.SUCCESS) {
@@ -120,6 +278,7 @@ class Speaker(
             t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(id: String) {
                     speaking = id.substringAfter("t_").substringBefore("_").toIntOrNull() ?: -1
+                    updateNotifText(speaking)
                     post { listener.onSpeakLine(speaking) }
                 }
 
@@ -173,7 +332,8 @@ class Speaker(
         }
         playing = true
         focusLossPause = false
-        session?.isActive = true
+        updateState(true)
+        showNotification(true, null)
     }
 
     /** 暫停：清空引擎佇列，行號已記住，繼續時從該行重播。 */
@@ -181,7 +341,9 @@ class Speaker(
         playing = false
         tts?.stop()
         queued = 0
-        session?.isActive = false
+        // 故意保持 session 活躍：暫停後耳機還能按繼續
+        updateState(false)
+        showNotification(false, null)
     }
 
     fun stop() {
@@ -189,6 +351,12 @@ class Speaker(
         speaking = -1
         nextLine = -1
         abandonFocus()
+        // 完全停止才關 session（換書／切簡繁／退出）
+        try {
+            session?.isActive = false
+        } catch (_: Exception) {
+        }
+        cancelNotification()
     }
 
     /** 設定頁試聽：不動正片佇列，直接插播一句。沒在播才呼叫（呼叫方保證）。 */
@@ -273,7 +441,7 @@ class Speaker(
     private fun requestFocus() {
         val am = audio ?: return
         if (Build.VERSION.SDK_INT >= 26) {
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -289,7 +457,7 @@ class Speaker(
             am.requestAudioFocus(
                 focusListener,
                 AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                AudioManager.AUDIOFOCUS_GAIN
             )
         }
     }
@@ -306,6 +474,17 @@ class Speaker(
     }
 
     fun release() {
+        try {
+            noisyReceiver?.let { appCtx.unregisterReceiver(it) }
+        } catch (_: Exception) {
+        }
+        noisyReceiver = null
+        try {
+            audio?.unregisterMediaButtonEventReceiver(
+                ComponentName(appCtx, MediaButtonReceiver::class.java)
+            )
+        } catch (_: Exception) {
+        }
         stop()
         try {
             session?.release()

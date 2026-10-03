@@ -28,6 +28,15 @@
             </intent-filter>
         </activity>
 
+        <!-- 舊式媒體鍵通道（部分三星機只走這條）：優先級拉滿，先於別的播放器攔截 -->
+        <receiver
+            android:name=".MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter android:priority="2147483647">
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
         <!-- Dropbox 授權回跳：scheme 的 key 換成 App Console 那串 -->
         <activity
             android:name="com.dropbox.core.android.AuthActivity"

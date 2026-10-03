@@ -1,6 +1,6 @@
 {
-    "versionCode":  5,
-    "versionName":  "1.3.0",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.3.0/TxtReader.apk",
-    "notes":  "TTS語速聲調加試聽；跳過裝飾行；選單區放大"
+    "versionCode":  6,
+    "versionName":  "1.4.0",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.0/TxtReader.apk",
+    "notes":  "TTS通知列控制加停止鍵；藍牙耳機鍵通道"
 }

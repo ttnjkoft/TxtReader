@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private val fontPick = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) copyFont(uri)
     }
+    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -364,6 +365,13 @@ class MainActivity : AppCompatActivity() {
             }
         )
         speaker.onMediaToggle = { toggleSpeak() }
+        // 舊式廣播通道的鉤子（探針字不一樣，好分辨哪條路通的）
+        Speaker.onExternalToggle = {
+            runOnUiThread { toggleSpeak() }
+        }
+        Speaker.onExternalStop = {
+            runOnUiThread { stopSpeak(false) }
+        }
         speaker.onAutoPaused = { btnSpeak.text = "繼續" }
         speaker.onAutoResumed = { btnSpeak.text = "暫停" }
         speaker.speechRate = prefs.getFloat("speechRate", 1f)
@@ -539,8 +547,8 @@ class MainActivity : AppCompatActivity() {
         }
         val rateLabel = label("")
         val rateBar = SeekBar(this).apply {
-            max = 150
-            progress = ((speaker.speechRate * 100).toInt() - 50).coerceIn(0, 150)
+            max = 250
+            progress = ((speaker.speechRate * 100).toInt() - 50).coerceIn(0, 250)
         }
         val pitchLabel = label("")
         val pitchBar = SeekBar(this).apply {
@@ -1120,6 +1128,13 @@ class MainActivity : AppCompatActivity() {
 
     /** 朗讀開關：從目前看到的行開始；暫停記行號，繼續從該行重播。 */
     private fun toggleSpeak() {
+        // Android 13+ 通知要授權才顯示；不給也不影響播音，第一次按朗讀時問
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         if (speaker.isPlaying()) {
             stopSpeak(paused = true)
             return
@@ -1240,6 +1255,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         saveNow()
+        Speaker.onExternalToggle = null
+        Speaker.onExternalStop = null
         if (::speaker.isInitialized) speaker.release()
         currentFile?.close()
         super.onDestroy()
