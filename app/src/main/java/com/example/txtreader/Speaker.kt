@@ -50,6 +50,7 @@ class Speaker(
     private var speaking = -1
     private var nextLine = -1
     private var focusLossPause = false
+    private var pendingPlay: Int? = null
     private var session: MediaSession? = null
     private var audio: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
@@ -253,6 +254,14 @@ class Speaker(
             session?.setMediaButtonReceiver(pi)
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * TTS 引擎本體懶加載：第一次朗讀／試聽才建（綁系統服務約幾百毫秒）。
+     * 建好後若有人在等（pendingPlay），直接開播。
+     */
+    private fun initEngine() {
+        if (tts != null) return
         tts = TextToSpeech(appCtx) { st ->
             if (st != TextToSpeech.SUCCESS) {
                 post { listener.onTtsError("語音引擎啟動失敗") }
@@ -296,6 +305,11 @@ class Speaker(
                 }
             })
             engineReady = true
+            // 懶加載：之前有人按過朗讀，引擎好了直接開播（binder 線程，play 內部都是線程安全的）
+            pendingPlay?.let {
+                pendingPlay = null
+                play(it)
+            }
         }
     }
 
@@ -303,10 +317,15 @@ class Speaker(
         main.post(r)
     }
 
-    /** 從第 from 行開始播。 */
+    /** 從第 from 行開始播。引擎還沒好就先建，等好了自動開播。 */
     fun play(from: Int) {
+        if (tts == null) {
+            initEngine()
+            pendingPlay = maxOf(0, from)
+            return
+        }
         if (!engineReady) {
-            listener.onTtsError("語音引擎尚未就緒，稍後再按")
+            pendingPlay = maxOf(0, from)
             return
         }
         requestFocus()
@@ -322,12 +341,11 @@ class Speaker(
         topUp()
         val src = source()
         if (queued == 0) {
+            // play 可能跑在 binder 線程（懶加載回調），listener 一律 post 到主線程
             if (src == null || nextLine >= src.size) {
                 abandonFocus()
-                listener.onBookDone()
-            } else {
-                listener.onTtsError("後面沒有可朗讀的文字")
-            }
+                post { listener.onBookDone() }
+            } else post { listener.onTtsError("後面沒有可朗讀的文字") }
             return
         }
         playing = true
@@ -361,6 +379,11 @@ class Speaker(
 
     /** 設定頁試聽：不動正片佇列，直接插播一句。沒在播才呼叫（呼叫方保證）。 */
     fun speakPreview(text: String) {
+        if (tts == null) {
+            // 引擎還沒建：先建起來，這次不播（半秒後再拉就有聲）
+            initEngine()
+            return
+        }
         if (!engineReady) return
         try {
             tts?.setSpeechRate(speechRate)

@@ -1,6 +1,6 @@
 {
-    "versionCode":  6,
+    "versionCode":  7,
     "versionName":  "1.4.0",
     "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.0/TxtReader.apk",
-    "notes":  "TTS通知列控制加停止鍵；藍牙耳機鍵通道"
+    "notes":  "同步防毒：開書認檔名；0%永不贏有進度；舊位置借屍還魂修正"
 }

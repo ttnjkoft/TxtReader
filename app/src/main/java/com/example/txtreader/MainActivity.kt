@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnOpen: Button
     private lateinit var status: TextView
     private lateinit var lineCount: TextView
+    private lateinit var clock: TextView
     private lateinit var topBar: LinearLayout
     private lateinit var tocPanel: LinearLayout
     private lateinit var scrim: View
@@ -124,11 +125,19 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#B0B0B0"))
             text = "範例文字"
         }
-        // 行數跟資訊列同字級，放資訊列最右
+        // 行數跟資訊列同字級，放資訊列最右；時鐘再右邊，顏色淡一階區分
         lineCount = TextView(this).apply {
             textSize = 12f
             setSingleLine()
             setTextColor(Color.parseColor("#B0B0B0"))
+            val p = (8 * resources.displayMetrics.density).toInt()
+            setPadding(p, 0, 0, 0)
+            text = ""
+        }
+        clock = TextView(this).apply {
+            textSize = 12f
+            setSingleLine()
+            setTextColor(Color.parseColor("#808080"))
             val p = (8 * resources.displayMetrics.density).toInt()
             setPadding(p, 0, 0, 0)
             text = ""
@@ -188,6 +197,9 @@ class MainActivity : AppCompatActivity() {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
             ))
             addView(lineCount, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(clock, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ))
         }
@@ -331,6 +343,8 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(root)
         applyFullscreen(true) // 預設全螢幕（選單隱藏）
+        refreshClock()
+        clockHandler.post(clockTick)
 
         S2T.preload(this) {
             // 詞庫就緒：把存的簡繁開關補上（目錄跟著重建，時序早晚都對）
@@ -349,6 +363,8 @@ class MainActivity : AppCompatActivity() {
             { if (currentFile == null) null else reader.activeSource() },
             object : Speaker.Listener {
                 override fun onSpeakLine(line: Int) {
+                    // 懶加載延遲開播時，按鈕在這裡補成暫停
+                    btnSpeak.text = "暫停"
                     reader.followSpeak(line)
                 }
 
@@ -423,6 +439,28 @@ class MainActivity : AppCompatActivity() {
         return ans
     }
 
+    private val clockHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val timeFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+
+    /** 資訊列時鐘：翻頁時更新＋每 30 秒 tick（盯著同一頁也會走）。 */
+    private fun refreshClock() {
+        clock.text = try {
+            timeFmt.format(java.util.Date())
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private val clockTick = object : Runnable {
+        override fun run() {
+            try {
+                refreshClock()
+            } catch (_: Exception) {
+            }
+            clockHandler.postDelayed(this, 30000)
+        }
+    }
+
     /** 狀態列：書名｜目前章節｜進度｜編碼 */
     private fun refreshStatus() {
         val f = currentFile ?: run { status.text = "範例文字"; return }
@@ -434,6 +472,7 @@ class MainActivity : AppCompatActivity() {
         val ch = displayTitle(if (ci >= 0) currentChapters[ci].title else "（卷首）")
         val pct = (reader.currentLine() + 1) * 100 / maxOf(1, f.size)
         status.text = "${f.name}｜$ch｜$pct%｜${f.charset.name()}"
+        refreshClock()
     }
 
     /** 開檔後（重）建目錄：有章節用真的，沒有用 20 段虛擬目錄 */
@@ -1192,7 +1231,17 @@ class MainActivity : AppCompatActivity() {
                 val uriStr = uri.toString()
                 // 書架：有就更新最後開啟，沒有就建檔；順手取出上次位置
                 val dao = Db.get(applicationContext).books()
-                val old = dao.byUri(uriStr)
+                var old = dao.byUri(uriStr)
+                if (old == null) {
+                    // Uri 對不上但檔名一樣：系統重發了文件 ID，
+                    // 認名字不認 Uri，把舊進度搬到新 Uri，不要當新書歸零
+                    val sameName = dao.byName(f.name)
+                    if (sameName != null && sameName.uri != uriStr) {
+                        dao.delete(sameName.uri)
+                        old = sameName.copy(uri = uriStr)
+                        dao.upsert(old)
+                    }
+                }
                 if (old == null) {
                     dao.upsert(Book(uri = uriStr, name = f.name, lastOpen = System.currentTimeMillis()))
                 } else {
@@ -1254,6 +1303,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        try {
+            clockHandler.removeCallbacks(clockTick)
+        } catch (_: Exception) {
+        }
         saveNow()
         Speaker.onExternalToggle = null
         Speaker.onExternalStop = null

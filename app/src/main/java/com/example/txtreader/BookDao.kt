@@ -12,6 +12,10 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE uri = :uri LIMIT 1")
     fun byUri(uri: String): Book?
 
+    /** 同名書：SAF Uri 會變（重開機／媒體庫重掃），檔名才是本體。 */
+    @Query("SELECT * FROM books WHERE name = :name LIMIT 1")
+    fun byName(name: String): Book?
+
     @Upsert
     fun upsert(b: Book)
 

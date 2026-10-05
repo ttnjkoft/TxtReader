@@ -3,6 +3,7 @@ package com.example.txtreader
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -87,12 +88,16 @@ class TxtFile private constructor(
         private val DEFAULT_CHAPTER = Regex(
             """^(第[0-9一二三四五六七八九十百千萬零〇兩]+[章節卷回話集篇部]|Chapter\s*[0-9IVXivx\-]+|楔子|序章|終章|前言|後記|番外|引子|尾聲)"""
         )
+        // 首字快篩：上面那些開頭只能是這幾個字，其他行連正則都不跑（99% 死在這，省一個量級）
+        private val CHAPTER_FIRST = setOf('第', 'C', '楔', '序', '終', '前', '後', '番', '引', '尾')
         private val TITLE_PUNCT = setOf('。', '！', '？', '；')
 
         /** 阻塞呼叫，一定要在背景線程跑 */
         fun open(context: Context, uri: Uri, customChapterRegex: Regex? = null): TxtFile {
+            val t0 = System.nanoTime()
             val name = displayName(context, uri)
             val file = copyToCache(context, uri, name)
+            logTime("copy", t0)
             val raf = RandomAccessFile(file, "r")
             val mapped = try {
                 raf.channel.use { ch -> ch.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0, raf.length()) }
@@ -110,14 +115,21 @@ class TxtFile private constructor(
                 i++
             }
             val lineStart = starts.toLongArray()
+            logTime("index", t0)
 
             // 2) 編碼偵測：嚴格 UTF-8 先試，不行就 GBK/Big5 二選一（中日韓字數多的贏）
             val charset = detectCharset(mapped, n)
+            logTime("charset", t0)
 
             // 3) 同一遍收章節：行太長(>40字)或含 。！？； 的當正文跳過
             val chapters = scanChapters(mapped, lineStart, charset, customChapterRegex)
+            logTime("chapters+total", t0)
 
             return TxtFile(name, charset, mapped, lineStart, n.toLong(), chapters, file)
+        }
+
+        private fun logTime(tag: String, t0: Long) {
+            Log.d("TxtReader", "open.$tag ${(System.nanoTime() - t0) / 1000000}ms")
         }
 
         private fun displayName(context: Context, uri: Uri): String {
@@ -160,14 +172,26 @@ class TxtFile private constructor(
                     .decode(ByteBuffer.wrap(all))
                 return Charset.forName("UTF-8")
             } catch (_: Exception) { }
-            // GBK vs Big5：解開後誰的中日韓字多用誰
-            val gbkCjk = countCjk(String(all, Charset.forName("GBK")))
+            // GBK vs Big5：只看頭中尾三段樣本（編碼是整檔一致的，全解浪費時間）
+            val sample = sampleBytes(all)
+            val gbkCjk = countCjk(String(sample, Charset.forName("GBK")))
             val big5Cjk = try {
-                countCjk(String(all, Charset.forName("Big5")))
+                countCjk(String(sample, Charset.forName("Big5")))
             } catch (_: Exception) {
                 -1
             }
             return if (big5Cjk > gbkCjk) Charset.forName("Big5") else Charset.forName("GBK")
+        }
+
+        /** 取頭 32K＋中 32K＋尾 32K（不足就全取），給編碼偵測用。 */
+        private fun sampleBytes(all: ByteArray): ByteArray {
+            val take = 32 * 1024
+            if (all.size <= take * 3) return all
+            val out = ByteArray(take * 3)
+            System.arraycopy(all, 0, out, 0, take)
+            System.arraycopy(all, all.size / 2 - take / 2, out, take, take)
+            System.arraycopy(all, all.size - take, out, take * 2, take)
+            return out
         }
 
         private fun countCjk(s: String): Int {
@@ -199,7 +223,7 @@ class TxtFile private constructor(
                 val hit = if (custom != null) {
                     custom.containsMatchIn(line)
                 } else {
-                    if (TITLE_PUNCT.any { it in line }) false
+                    if (line[0] !in CHAPTER_FIRST || TITLE_PUNCT.any { it in line }) false
                     else DEFAULT_CHAPTER.containsMatchIn(line)
                 }
                 if (hit) out.add(Chapter(line, li))
