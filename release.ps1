@@ -64,17 +64,27 @@ try {
     git commit -m "發版 v$VersionName：$Notes"
     git push origin master
 
-    # 4) GitHub release + 上傳 APK
+    # 4) GitHub release + 上傳 APK（冪等：release 已存在就跳過建立，同名 asset 先刪再傳）
     $tokenFile = "github-token.txt"
     if (-not (Test-Path -LiteralPath $tokenFile)) { throw "缺 github-token.txt（把 PAT 貼在第一行）" }
     $token = (Get-Content $tokenFile -TotalCount 1).Trim()
     if ([string]::IsNullOrWhiteSpace($token)) { throw "github-token.txt 是空的" }
     $headers = @{ Authorization = "Bearer $token"; Accept = "application/vnd.github+json" }
-    $relBody = @{ tag_name = "v$VersionName"; name = "v$VersionName"; body = $Notes } | ConvertTo-Json
+    $rel = $null
     try {
-        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases" -Method Post -Headers $headers -Body $relBody -ContentType "application/json"
+        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases/tags/v$VersionName" -Headers $headers
+        Write-Output "release v$VersionName 已存在，跳過建立"
     } catch {
-        throw "建 release 失敗（tag v$VersionName 可能已存在）：$($_.Exception.Message)"
+        $relBody = @{ tag_name = "v$VersionName"; name = "v$VersionName"; body = $Notes } | ConvertTo-Json
+        try {
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases" -Method Post -Headers $headers -Body $relBody -ContentType "application/json"
+        } catch {
+            throw "建 release 失敗：$($_.Exception.Message)"
+        }
+    }
+    foreach ($d in @($rel.assets) | Where-Object { $_.name -eq "TxtReader.apk" }) {
+        Invoke-RestMethod -Uri ("https://api.github.com/repos/ttnjkoft/TxtReader/releases/assets/" + $d.id) -Method Delete -Headers $headers | Out-Null
+        Write-Output "刪掉舊的同名 APK 再傳"
     }
     $uploadUrl = ($rel.upload_url -replace '\{\?name,label\}', "?name=TxtReader.apk")
     Invoke-RestMethod -Uri $uploadUrl -Method Post -Headers @{ Authorization = "Bearer $token" } -ContentType "application/vnd.android.package-archive" -InFile $apk | Out-Null
