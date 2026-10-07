@@ -49,6 +49,8 @@ class ReaderView @JvmOverloads constructor(
     private var current = TextPos(0, 0)
     private var page: Page = Page(emptyList(), TextPos(0, 0), false)
     private val backStack = ArrayDeque<TextPos>()
+    /** 本頁行間補償：把底部餘白攤到每行間隙，讓文字剛好填滿上下邊距（只影響畫法，不影響分頁）。 */
+    private var spreadPx = 0f
 
     // 跟隨翻頁用計數器：手動翻頁 manualGen+1；自動跟隨只在「沒手動干預」時動，
     // 一旦手動翻過就暫停跟隨，直到翻回朗讀所在頁自動恢復（不再亂拉畫面）
@@ -237,6 +239,17 @@ class ReaderView @JvmOverloads constructor(
             lines, current, paint, contentWidth(), lh, availH,
             paragraphGapDp * resources.displayMetrics.density, firstLineIndent
         )
+        // 底部對齊：滿頁才把餘白攤到行間隙；最後一頁（不滿）保持自然，免得三五行被扯散
+        spreadPx = 0f
+        val n = page.lines.size
+        if (page.hasNext && n > 1) {
+            val den = resources.displayMetrics.density
+            val gapPx = paragraphGapDp * den
+            var gaps = 0
+            for (i in 0 until n - 1) if (page.paraEnd.getOrNull(i) == true) gaps++
+            val leftover = availH - (n * lh + gaps * gapPx)
+            if (leftover > 1f) spreadPx = minOf(leftover / (n - 1), 8f * den)
+        }
         onProgress?.invoke(current.lineIndex, lines.size)
         invalidate()
     }
@@ -396,7 +409,7 @@ class ReaderView @JvmOverloads constructor(
             } else {
                 canvas.drawText(line, pad, y, paint)
             }
-            y += lh
+            y += lh + spreadPx
         }
     }
 }

@@ -4,6 +4,11 @@ gradlew.bat installDebug      # 測試版直接裝到手機（Studio 按 Run 等
 gradlew.bat clean             # 清掉 build，怪問題先跑這個再 build
 gradlew.bat --version         # 看 Gradle 版本（出錯回報時用）	
 
-
+.\gradlew.bat assembleRelease --console=plain
 $env:Path += ";$env:LOCALAPPDATA\Android\Sdk\platform-tools"
 adb install --user 0 -r "C:\TxtReader\app\build\outputs\apk\release\TxtReader.apk"
+
+
+.\gradlew.bat assembleRelease --console=plain
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" devices
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "C:\TxtReader\app\build\outputs\apk\release\TxtReader.apk"

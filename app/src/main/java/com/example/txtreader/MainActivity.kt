@@ -31,7 +31,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * Phase 0-5 主畫面：程式碼排版面，不寫 XML。
- * 上排：狀態列常駐；下排：ReaderView＋工具列（書架 / 目錄 / 繁體 / 開檔 / A- / A+，點中間叫出來覆蓋在下）。
+ * 平時全螢幕只看書；點中間叫出底選單（上：狀態列書名｜章節｜進度｜編碼，下：書架/目錄/繁體/開檔/A-/A+等按鈕）。
  * 目錄是左側面板，書架是右側面板（書名＋進度，點書回上次位置，長按刪書，含備份／還原）。
  * 進度每 2 秒存一次＋切后台／關閉時存，開檔自動回到上次位置。
  */
@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var lineCount: TextView
     private lateinit var clock: TextView
-    private lateinit var topBar: LinearLayout
+    private lateinit var bottomBar: LinearLayout
     private lateinit var tocPanel: LinearLayout
     private lateinit var scrim: View
     private lateinit var tocList: ListView
@@ -170,8 +170,8 @@ class MainActivity : AppCompatActivity() {
         btnSettings.setOnClickListener { openDisplaySettings() }
         btnSearch.setOnClickListener { openSearch() }
 
-        // 工具列改兩行：第一行狀態全文顯示，第二行六顆等寬按鈕，不再被擠掉
-        // 底選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在下，不擠版面）
+        // 底選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在下，不擠版面）。
+        // 上面是狀態列（書名｜章節｜進度｜編碼＋行數時鐘），下面是工具列按鈕，兩列一起出現／隱藏
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#1A1A1A"))
@@ -181,14 +181,7 @@ class MainActivity : AppCompatActivity() {
                 ))
             }
         }
-        topBar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(buttonsRow, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-            visibility = View.GONE
-        }
-        // 頂資訊列：常駐。[書名｜章節｜進度｜編碼] ＋最右行數
+        // 狀態列。[書名｜章節｜進度｜編碼] ＋最右行數（跟工具列一起隱藏／出現，不常駐）
         val infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -203,14 +196,21 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ))
         }
-        val content = LinearLayout(this).apply {
+        bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#121212"))
             addView(infoBar, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ))
+            addView(buttonsRow, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            visibility = View.GONE
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#121212"))
             addView(reader, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT
             ))
         }
 
@@ -327,7 +327,7 @@ class MainActivity : AppCompatActivity() {
             addView(content, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             ))
-            addView(topBar, FrameLayout.LayoutParams(
+            addView(bottomBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
             ))
@@ -1200,10 +1200,10 @@ class MainActivity : AppCompatActivity() {
         btnSpeak.text = if (paused) "繼續" else "朗讀"
     }
 
-    /** 選單開關：點中間切換；開選單時退出全螢幕，關選單回到全螢幕。 */
+    /** 選單開關：點中間切換，狀態列＋工具列一起在下方出現／隱藏；開選單時退出全螢幕，關選單回到全螢幕。 */
     private fun toggleMenu() {
-        val show = topBar.visibility != View.VISIBLE
-        topBar.visibility = if (show) View.VISIBLE else View.GONE
+        val show = bottomBar.visibility != View.VISIBLE
+        bottomBar.visibility = if (show) View.VISIBLE else View.GONE
         applyFullscreen(!show)
     }
 
