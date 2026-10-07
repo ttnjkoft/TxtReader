@@ -1,6 +1,6 @@
 {
-    "versionCode":  8,
-    "versionName":  "1.4.1",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.1/TxtReader.apk",
-    "notes":  "補發時鐘及同期內容"
+    "versionCode":  9,
+    "versionName":  "1.4.2",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.2/TxtReader.apk",
+    "notes":  "工具列放下方、狀態列放上方"
 }

@@ -31,7 +31,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * Phase 0-5 主畫面：程式碼排版面，不寫 XML。
- * 上排：狀態列 + 書架 / 目錄 / 繁體 / 開檔 / A- / A+；下排：ReaderView。
+ * 上排：狀態列常駐；下排：ReaderView＋工具列（書架 / 目錄 / 繁體 / 開檔 / A- / A+，點中間叫出來覆蓋在下）。
  * 目錄是左側面板，書架是右側面板（書名＋進度，點書回上次位置，長按刪書，含備份／還原）。
  * 進度每 2 秒存一次＋切后台／關閉時存，開檔自動回到上次位置。
  */
@@ -170,8 +170,8 @@ class MainActivity : AppCompatActivity() {
         btnSettings.setOnClickListener { openDisplaySettings() }
         btnSearch.setOnClickListener { openSearch() }
 
-        // 頂欄改兩行：第一行狀態全文顯示，第二行六顆等寬按鈕，不再被擠掉
-        // 頂選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在上，不擠版面）
+        // 工具列改兩行：第一行狀態全文顯示，第二行六顆等寬按鈕，不再被擠掉
+        // 底選單：平時隱藏全螢幕看，點中間叫出來（覆蓋在下，不擠版面）
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#1A1A1A"))
@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
             ))
             visibility = View.GONE
         }
-        // 底資訊列：常駐。[書名｜章節｜進度｜編碼] ＋最右行數
+        // 頂資訊列：常駐。[書名｜章節｜進度｜編碼] ＋最右行數
         val infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -206,11 +206,11 @@ class MainActivity : AppCompatActivity() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#121212"))
-            addView(reader, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
-            ))
             addView(infoBar, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(reader, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             ))
         }
 
@@ -329,7 +329,7 @@ class MainActivity : AppCompatActivity() {
             ))
             addView(topBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP
+                Gravity.BOTTOM
             ))
             addView(scrim, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
