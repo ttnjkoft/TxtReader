@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var shelfBooks: List<Book> = emptyList()
     private var lastSaveAt = 0L
     private var lastUploadAt = 0L
+    private var lastSyncAt = 0L
+    private var suppressSave = false
     private var openedPos: TextPos? = null
     private var openedRowTime = 0L
     // 最後存過的位置：沒動就不存，免得舊位置配新時間戳洗掉別台進度
@@ -381,18 +383,27 @@ class MainActivity : AppCompatActivity() {
             }
         )
         speaker.onMediaToggle = { toggleSpeak() }
-        // 舊式廣播通道的鉤子（探針字不一樣，好分辨哪條路通的）
+        // 舊式廣播通道與通知鈕統一走防連跳入口，避免與 MediaSession 回調重複觸發而互相抵銷
         Speaker.onExternalToggle = {
-            runOnUiThread { toggleSpeak() }
+            speaker.dispatchToggle()
         }
         Speaker.onExternalStop = {
             runOnUiThread { stopSpeak(false) }
         }
-        speaker.onAutoPaused = { btnSpeak.text = "繼續" }
+        speaker.onAutoPaused = {
+            btnSpeak.text = "繼續"
+            saveNow(forceUpload = true)
+        }
         speaker.onAutoResumed = { btnSpeak.text = "暫停" }
         speaker.speechRate = prefs.getFloat("speechRate", 1f)
         speaker.pitch = prefs.getFloat("pitch", 1f)
         speaker.init()
+        try {
+            speaker.sessionToken?.let { token ->
+                setMediaController(android.media.session.MediaController(this, token))
+            }
+        } catch (_: Exception) {
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -410,15 +421,21 @@ class MainActivity : AppCompatActivity() {
         // 沒開檔時先有東西看
         reader.setText("歡迎使用 TxtReader。\n點右上「開檔」選一個 .txt。\n點上方上一頁、點下方下一頁，點中間叫出選單；上下滑也可翻頁。\n點「目錄」可跳章；沒章節的書會自動按比例切段。\n點「書架」回上次進度；長按書架可刪書。\n長按畫面可跑丟字自我檢測。\n\n這是第一章 楔子\n測試斷行：，。！？；：這些標點不該出現在行首。\n")
         refreshShelf()
-        // 啟動自動開上次那本：有就回到上次位置，沒有／打不開就停在範例頁
+        // 啟動自動開上次那本：優先認 lastOpenedUri，沒有才拿書架第一本
         Thread {
             try {
-                val last = Db.get(applicationContext).books().all().firstOrNull()
-                if (last != null) runOnUiThread { openUri(Uri.parse(last.uri), quiet = true) }
+                val dao = Db.get(applicationContext).books()
+                val all = dao.all()
+                val prefUri = prefs.getString("lastOpenedUri", null)
+                val last = (if (prefUri != null) all.find { it.uri == prefUri } else null) ?: all.firstOrNull()
+                if (last != null) {
+                    runOnUiThread { openUri(Uri.parse(last.uri), quiet = true) }
+                } else {
+                    autoSyncOnStart()
+                }
             } catch (_: Exception) {
             }
         }.apply { isDaemon = true; start() }
-        autoSyncOnStart()
         checkForUpdate()
     }
 
@@ -889,6 +906,7 @@ class MainActivity : AppCompatActivity() {
     private fun openShelf() {
         closeToc()
         refreshShelf()
+        if (DropboxSync.isLinked(this)) syncAfterLogin(announce = false)
         shelfPanel.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
     }
@@ -930,7 +948,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 翻頁時最多每 2 秒存一次進度（存原文行號，不受簡繁開關影響）。 */
     private fun maybeSave() {
-        if (currentUri == null) return
+        if (suppressSave || currentUri == null) return
         val now = System.currentTimeMillis()
         if (now - lastSaveAt > 2000) saveNow()
     }
@@ -950,16 +968,21 @@ class MainActivity : AppCompatActivity() {
         return Progress(uriStr, pos.lineIndex, pos.charOffset, pct, ch, System.currentTimeMillis())
     }
 
-    private fun saveNow() {
+    private fun saveNow(forceUpload: Boolean = false) {
+        if (suppressSave) return
         val p = snapshotProgress() ?: return
-        if (p.line == lastSavedPos?.lineIndex && p.off == lastSavedPos?.charOffset) return
+        if (p.line == lastSavedPos?.lineIndex && p.off == lastSavedPos?.charOffset) {
+            if (forceUpload) maybeUpload(force = true)
+            return
+        }
         lastSavedPos = TextPos(p.line, p.off)
         lastSaveAt = p.t
-        maybeUpload()
+        // 必須同線程「先寫入本機 DB → 再讀 DB 上傳 Dropbox」，避免上傳線程比 DB 寫入還快而把舊進度推上雲
         Thread {
             try {
                 Db.get(applicationContext).books()
                     .saveProgress(p.uri, p.line, p.off, p.pct, p.chapter, p.t)
+                uploadNowIfAllowed(force = forceUpload)
             } catch (_: Exception) {
             }
         }.apply { isDaemon = true; start() }
@@ -1003,37 +1026,43 @@ class MainActivity : AppCompatActivity() {
     // ---------- Dropbox 同步 ----------
 
     private fun onSyncButton() {
-        if (DropboxSync.isLinked(this)) syncAfterLogin()
+        if (DropboxSync.isLinked(this)) syncAfterLogin(announce = true, force = true)
         else {
             Toast.makeText(this, "開啟瀏覽器登入 Dropbox（一次就好）", Toast.LENGTH_SHORT).show()
             DropboxSync.beginAuth(this)
         }
     }
 
-    /** 手動同步的統一入口（一定走背景線程；瀏覽器授權回來走 onResume）。 */
-    private fun syncAfterLogin(announce: Boolean = true) {
+    /** 手動與自動同步的統一入口（一定走背景線程；瀏覽器授權回來與前景喚醒走 onResume）。 */
+    private fun syncAfterLogin(announce: Boolean = true, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            if (!announce && !force && now - lastSyncAt < 3000) return
+            lastSyncAt = now
+        }
         Thread {
             try {
-                // 先把本機最新進度寫庫＋推上雲，再拉別台的（不然節流內的進度合不上來）；
-                // 位置沒動就跳過寫庫，舊位置不配新時間戳
-                snapshotProgress()?.let { p ->
-                    if (p.line != lastSavedPos?.lineIndex || p.off != lastSavedPos?.charOffset) {
-                        lastSaveAt = p.t
-                        lastSavedPos = TextPos(p.line, p.off)
-                        try {
-                            Db.get(applicationContext).books()
-                                .saveProgress(p.uri, p.line, p.off, p.pct, p.chapter, p.t)
-                        } catch (_: Exception) {
+                // 若使用者在本機確實翻過頁（位置與 lastSavedPos 不同），先寫入本機 DB 再參與合併；
+                // 位置沒動就絕對不寫庫，保證舊位置不會拿到新時間戳去洗掉別台的新進度
+                if (!suppressSave && lastSavedPos != null) {
+                    snapshotProgress()?.let { p ->
+                        if (p.line != lastSavedPos?.lineIndex || p.off != lastSavedPos?.charOffset) {
+                            lastSaveAt = p.t
+                            lastSavedPos = TextPos(p.line, p.off)
+                            try {
+                                Db.get(applicationContext).books()
+                                    .saveProgress(p.uri, p.line, p.off, p.pct, p.chapter, p.t)
+                            } catch (_: Exception) {
+                            }
                         }
                     }
                 }
-                DropboxSync.uploadLocal(applicationContext)
                 val r = DropboxSync.syncNow(applicationContext, currentFile?.name)
                 runOnUiThread {
                     if (announce) Toast.makeText(this, r.msg, Toast.LENGTH_SHORT).show()
                     refreshShelf()
+                    applyWatched(r.watched, r.furtherRemote, manual = announce)
                     refreshStatus()
-                    applyWatched(r.watched)
                 }
             } catch (e: com.dropbox.core.InvalidAccessTokenException) {
                 // token 被使用者在網頁端收回等：清掉，下次重登
@@ -1045,48 +1074,96 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
-    /** 別台較新的進度：如果使用者還停在開檔時的位置，直接跳過去；已翻頁就不搶。 */
-    private fun applyWatched(w: Book?) {
+    /**
+     * 將合併勝出的雲端進度套用到目前畫面：
+     * - 只要勝出者 w 的位置與目前畫面不同，立即跳轉並同步更新 lastSavedPos（包在 suppressSave 內不觸發假存檔）。
+     * - 若手動按同步時，雲端另有進度更後面（行號更大）但因本機曾誤觸翻頁導致時間戳較新的紀錄，跳出詢問讓使用者一鍵拉回。
+     */
+    private fun applyWatched(w: Book?, furtherRemote: Book? = null, manual: Boolean = false) {
         val cf = currentFile ?: return
-        val op = openedPos ?: return
         if (w == null || w.name != cf.name) return
-        if (reader.currentPos() != op) return
-        if (w.lastOpen <= openedRowTime) return
-        if (w.lastLine == op.lineIndex && w.lastOffset == op.charOffset) return
-        reader.restore(TextPos(w.lastLine, w.lastOffset))
+        val cur = reader.currentPos()
+        if ((w.lastLine > 0 || w.lastOffset > 0) &&
+            (w.lastLine != cur.lineIndex || w.lastOffset != cur.charOffset)
+        ) {
+            jumpToSyncedBook(w)
+            return
+        }
+        if (manual && furtherRemote != null && furtherRemote.name == cf.name &&
+            (furtherRemote.lastLine > cur.lineIndex ||
+                (furtherRemote.lastLine == cur.lineIndex && furtherRemote.lastOffset > cur.charOffset))
+        ) {
+            val ch = displayTitle(furtherRemote.chapter.ifBlank { "卷首" })
+            AlertDialog.Builder(this)
+                .setTitle("發現雲端更後面的進度")
+                .setMessage("雲端另一台進度為 ${furtherRemote.pct}%（$ch），目前本機為 ${w.pct}%，是否跳轉至雲端進度？")
+                .setPositiveButton("跳轉至 ${furtherRemote.pct}%") { _, _ ->
+                    val uriStr = currentUri?.toString() ?: w.uri
+                    val now = System.currentTimeMillis()
+                    val adopted = w.copy(
+                        uri = uriStr,
+                        lastLine = furtherRemote.lastLine,
+                        lastOffset = furtherRemote.lastOffset,
+                        pct = furtherRemote.pct,
+                        chapter = furtherRemote.chapter,
+                        lastOpen = now
+                    )
+                    jumpToSyncedBook(adopted)
+                    Thread {
+                        try {
+                            Db.get(applicationContext).books().saveProgress(
+                                uriStr, adopted.lastLine, adopted.lastOffset,
+                                adopted.pct, adopted.chapter, now
+                            )
+                            uploadNowIfAllowed(force = true)
+                            runOnUiThread { refreshShelf() }
+                        } catch (_: Exception) {
+                        }
+                    }.apply { isDaemon = true; start() }
+                }
+                .setNegativeButton("保留本機 (${w.pct}%)", null)
+                .show()
+        }
+    }
+
+    private fun jumpToSyncedBook(w: Book) {
+        val target = TextPos(w.lastLine, w.lastOffset)
+        suppressSave = true
+        try {
+            lastSavedPos = target
+            reader.restore(target)
+        } finally {
+            suppressSave = false
+        }
         openedPos = reader.currentPos()
+        openedRowTime = w.lastOpen
+        lastSavedPos = reader.currentPos()
         refreshStatus()
         Toast.makeText(this, "已同步另一台的進度：${w.pct}%", Toast.LENGTH_SHORT).show()
     }
 
     /** 啟動自動同步一次（有登入才做，靜默，失敗不吵）。 */
     private fun autoSyncOnStart() {
-        Thread {
-            try {
-                if (!DropboxSync.isLinked(applicationContext)) return@Thread
-                val r = DropboxSync.syncNow(applicationContext, currentFile?.name)
-                runOnUiThread {
-                    refreshShelf()
-                    refreshStatus()
-                    applyWatched(r.watched)
-                }
-            } catch (_: Exception) {
+        if (!DropboxSync.isLinked(applicationContext)) return
+        syncAfterLogin(announce = false, force = true)
+    }
+
+    private fun uploadNowIfAllowed(force: Boolean = false) {
+        try {
+            val now = System.currentTimeMillis()
+            synchronized(this@MainActivity) {
+                if (!force && now - lastUploadAt < 10000) return
+                lastUploadAt = now
             }
-        }.apply { isDaemon = true; start() }
+            DropboxSync.uploadLocal(applicationContext)
+        } catch (_: Exception) {
+        }
     }
 
     /** 存檔後順手上傳（10 秒節流；切后台強制一次）。未登入直接跳過。 */
     private fun maybeUpload(force: Boolean = false) {
         Thread {
-            try {
-                val now = System.currentTimeMillis()
-                synchronized(this@MainActivity) {
-                    if (!force && now - lastUploadAt < 10000) return@Thread
-                    lastUploadAt = now
-                }
-                DropboxSync.uploadLocal(applicationContext)
-            } catch (_: Exception) {
-            }
+            uploadNowIfAllowed(force)
         }.apply { isDaemon = true; start() }
     }
 
@@ -1192,12 +1269,33 @@ class MainActivity : AppCompatActivity() {
     private fun stopSpeak(paused: Boolean) {
         if (paused) {
             pausedLine = speaker.lastSpoken().takeIf { it >= 0 } ?: reader.currentLine()
+            speaker.pause()
+            saveNow(forceUpload = true)
         } else {
             pausedLine = -1
+            speaker.stop()
         }
-        speaker.stop()
         reader.ttsLine = -1
         btnSpeak.text = if (paused) "繼續" else "朗讀"
+    }
+
+    /** 畫面在前台時，藍牙耳機按鍵會先走 Activity.dispatchKeyEvent，直接在這裡接住轉給防連跳切換。 */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        when (event.keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            android.view.KeyEvent.KEYCODE_HEADSETHOOK,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+            android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+            android.view.KeyEvent.KEYCODE_MEDIA_NEXT,
+            android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (::speaker.isInitialized) speaker.dispatchToggle()
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /** 選單開關：點中間切換，狀態列＋工具列一起在下方出現／隱藏；開選單時退出全螢幕，關選單回到全螢幕。 */
@@ -1229,7 +1327,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val f = TxtFile.open(applicationContext, uri)
                 val uriStr = uri.toString()
-                // 書架：有就更新最後開啟，沒有就建檔；順手取出上次位置
+                // 書架：有就取出上次位置，沒有就建檔（千萬別在開書時刷掉 old.lastOpen，否則舊進度會拿到最新時間戳洗掉別台的新進度！）
                 val dao = Db.get(applicationContext).books()
                 var old = dao.byUri(uriStr)
                 if (old == null) {
@@ -1243,34 +1341,34 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (old == null) {
-                    dao.upsert(Book(uri = uriStr, name = f.name, lastOpen = System.currentTimeMillis()))
-                } else {
-                    dao.saveProgress(
-                        uriStr, old.lastLine, old.lastOffset, old.pct, old.chapter,
-                        System.currentTimeMillis()
-                    )
+                    dao.upsert(Book(uri = uriStr, name = f.name, lastOpen = 0L))
                 }
                 val saved = dao.byUri(uriStr)
+                prefs.edit().putString("lastOpenedUri", uriStr).apply()
                 runOnUiThread {
                     currentFile?.close()
                     currentFile = f
                     currentUri = uri
-                    // 先占位：開書／還原瞬間 relayout 連帶的存檔直接跳過，
-                    // 否則 0% 或舊位置會配上新時間戳，先毒死雲端
-                    lastSavedPos = if (saved != null && (saved.lastLine > 0 || saved.lastOffset > 0))
+                    val initPos = if (saved != null && (saved.lastLine > 0 || saved.lastOffset > 0))
                         TextPos(saved.lastLine, saved.lastOffset) else TextPos(0, 0)
-                    reader.openFile(f)
-                    stopSpeak(false)
-                    rebuildToc()
-                    if (saved != null && (saved.lastLine > 0 || saved.lastOffset > 0)) {
-                        reader.restore(TextPos(saved.lastLine, saved.lastOffset))
-                        Toast.makeText(this, "回到上次：${saved.pct}%", Toast.LENGTH_SHORT).show()
+                    // 開書／還原期間鎖住 suppressSave，避免 relayout 觸發 saveNow 把舊位置配上新時間戳
+                    suppressSave = true
+                    try {
+                        lastSavedPos = initPos
+                        reader.openFile(f, initPos)
+                        stopSpeak(false)
+                        rebuildToc()
+                        if (saved != null && (saved.lastLine > 0 || saved.lastOffset > 0)) {
+                            Toast.makeText(this, "回到上次：${saved.pct}%", Toast.LENGTH_SHORT).show()
+                        }
+                    } finally {
+                        suppressSave = false
                     }
                     openedPos = reader.currentPos()
                     openedRowTime = saved?.lastOpen ?: 0L
                     lastSavedPos = reader.currentPos()
-                    // 開書順手同步一次：別台有新進度且你還沒翻頁，直接跳過去（靜默，只在跳轉時 Toast）
-                    if (DropboxSync.isLinked(applicationContext)) syncAfterLogin(announce = false)
+                    // 開書順手同步一次：別台有新進度直接跳過去（靜默，只在跳轉時 Toast）
+                    if (DropboxSync.isLinked(applicationContext)) syncAfterLogin(announce = false, force = true)
                     refreshStatus()
                     refreshShelf()
                     btnOpen.isEnabled = true
@@ -1287,18 +1385,21 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
-    /** 瀏覽器授權回來落地在這：有新憑證就存下並同步一次（沒登入／舊憑證直接跳過）。 */
+    /** 瀏覽器授權回來或從背景切回／解鎖螢幕：自動同步一次拉取別台最新進度。 */
     override fun onResume() {
         super.onResume()
         try {
-            if (DropboxSync.finishAuth(this)) syncAfterLogin()
+            if (DropboxSync.finishAuth(this)) {
+                syncAfterLogin(announce = true, force = true)
+            } else if (DropboxSync.isLinked(this) && currentFile != null) {
+                syncAfterLogin(announce = false)
+            }
         } catch (_: Exception) {
         }
     }
 
     override fun onPause() {
-        saveNow()
-        maybeUpload(force = true)
+        saveNow(forceUpload = true)
         super.onPause()
     }
 

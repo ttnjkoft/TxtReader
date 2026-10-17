@@ -187,10 +187,10 @@ class ReaderView @JvmOverloads constructor(
     }
 
     /** Phase 1：開 mmap 檔，不先解全文 */
-    fun openFile(f: TxtFile) {
+    fun openFile(f: TxtFile, initPos: TextPos = TextPos(0, 0)) {
         ttsLine = -1
         rawLines = f
-        current = TextPos(0, 0)
+        current = initPos
         backStack.clear()
         refreshSource()
     }

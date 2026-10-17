@@ -35,3 +35,5 @@ github-token.txt
 # OS 垃圾
 .DS_Store
 Thumbs.db
+.spectra/
+docs/spectra/.vector-search.db*

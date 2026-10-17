@@ -1,24 +1,30 @@
 package com.example.txtreader
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.app.PendingIntent
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
+import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.view.KeyEvent
 import java.util.Locale
 
 /**
@@ -26,9 +32,8 @@ import java.util.Locale
  * - 空行跳過；單行超過引擎上限（~4000字）自動切塊；一次只排 ~30 句進引擎，播完補。
  * - 暫停 = stop() + 記住行號，繼續從該行重播（句級精度，不用倒帶找位置）。
  * - 來電／被搶音訊自動暫停；短暫失去重拿回來自動繼續。
- * - 耳機線控：MediaSession 接播放／暫停鍵。
- * - 螢幕關掉照播（已排入引擎的不停）；程序被系統殺掉才停。
- *   沒做 foreground Service：自用一般時長夠用，整夜連播不夠再加。
+ * - 耳機線控／藍牙耳機：MediaSession + 本進程無聲 AudioTrack 搶佔媒體焦點 + 顯式 BroadcastReceiver。
+ * - 螢幕關掉整夜連播：搭配 TtsService 前景服務（mediaPlayback）＋ PARTIAL_WAKE_LOCK 防止系統休眠殺程序。
  */
 class Speaker(
     context: Context,
@@ -55,19 +60,122 @@ class Speaker(
     private var audio: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
     private var noisyReceiver: BroadcastReceiver? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var lastToggleAt = 0L
 
-    /** 播放狀態＋保持 session 活躍：暫停也不關，這樣耳機才能按繼續。 */
-    private fun updateState(playing: Boolean) {
+    val sessionToken: MediaSession.Token?
+        get() = session?.sessionToken
+
+    /**
+     * 統一防連跳（Debounce 300ms）：
+     * 藍牙耳機按下時，系統可能同時觸發 MediaSession.Callback 與 MediaButtonReceiver，
+     * 若不節流會瞬間「暫停→又開始」抵銷掉，看起來就像沒反應。
+     */
+    fun dispatchToggle() {
+        main.post {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastToggleAt < 300L) return@post
+            lastToggleAt = now
+            onMediaToggle?.invoke()
+        }
+    }
+
+    /**
+     * 持有多媒體喚醒鎖（PARTIAL_WAKE_LOCK）：
+     * 每次開播與每念完一句補佇列（topUp）時續租 30 分鐘，確保關螢幕數小時 CPU 也不會在句間休眠；
+     * 暫停／停止／播完立即釋放，且有 30 分鐘安全上限避免意外常駐耗電。
+     */
+    private fun acquireWakeLock() {
+        try {
+            val wl = wakeLock ?: run {
+                val pm = appCtx.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+                pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TxtReader:TTS").apply {
+                    setReferenceCounted(false)
+                }.also { wakeLock = it }
+            }
+            wl.acquire(30 * 60 * 1000L)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 關鍵：Android 8+ 的 MediaSessionStack 只把藍牙耳機按鍵派給「自己 UID 有實際播放 USAGE_MEDIA AudioTrack」的 App。
+     * 因為系統 TTS 是在語音引擎程序（如 Google/Samsung TTS）發聲，本 App 自己的 UID 若沒播過 AudioTrack，
+     * 藍牙耳機按鍵會被系統送給上一個音樂 App 或直接忽略。
+     * 這裡在本進程播放 100ms 無聲 PCM，讓系統 AudioPlaybackMonitor 立即將 TxtReader 認證為當前媒體播放器。
+     */
+    private fun claimMediaButtonSession() {
+        Thread {
+            var track: AudioTrack? = null
+            try {
+                val sampleRate = 8000
+                val samples = sampleRate / 10 // 100ms 靜音
+                val buf = ByteArray(samples * 2)
+                val attrs = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+                val format = AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(attrs)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(buf.size)
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build()
+                track.write(buf, 0, buf.size)
+                track.play()
+                Thread.sleep(120)
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    track?.stop()
+                } catch (_: Exception) {
+                }
+                try {
+                    track?.release()
+                } catch (_: Exception) {
+                }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    /** 播放狀態＋MediaMetadata＋保持 session 活躍：暫停也不關，這樣藍牙耳機才能按繼續。 */
+    private fun updateState(playing: Boolean, currentText: String? = null) {
         try {
             val s = session ?: return
             val state = if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+            val speed = if (playing) 1f else 0f
+            s.setMetadata(
+                MediaMetadata.Builder()
+                    .putString(
+                        MediaMetadata.METADATA_KEY_TITLE,
+                        currentText ?: if (playing) "TxtReader 朗讀中" else "TxtReader 已暫停"
+                    )
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "TxtReader")
+                    .build()
+            )
             s.setPlaybackState(
                 PlaybackState.Builder()
                     .setActions(
-                        PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
-                            PlaybackState.ACTION_STOP or PlaybackState.ACTION_PLAY_PAUSE
+                        PlaybackState.ACTION_PLAY or
+                            PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_STOP or
+                            PlaybackState.ACTION_PLAY_PAUSE or
+                            PlaybackState.ACTION_SKIP_TO_NEXT or
+                            PlaybackState.ACTION_SKIP_TO_PREVIOUS
                     )
-                    .setState(state, 0L, 1f)
+                    .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, speed, SystemClock.elapsedRealtime())
                     .build()
             )
             s.isActive = true
@@ -112,7 +220,7 @@ class Speaker(
 
     fun isPlaying(): Boolean = playing
 
-    private val channelId = "tts_playback"
+    private val channelId = TtsService.CHANNEL_ID
 
     /** 通知列控制：播／暫停各一個直達按鈕（不經媒體鍵派送，保證能按）。失敗不影響播音。 */
     private fun toggleIntent(): PendingIntent {
@@ -173,8 +281,8 @@ class Speaker(
                 .setOngoing(playing)
                 .setDeleteIntent(stopIntent())
                 .setOnlyAlertOnce(true)
-            (appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
-                ?.notify(1, nb.build())
+            // 啟動或更新前景服務（TtsService），防止關螢幕一小時後被系統殺掉
+            TtsService.startOrUpdate(appCtx, nb.build(), playing)
         } catch (_: Exception) {
         }
     }
@@ -186,14 +294,13 @@ class Speaker(
         } catch (_: Exception) {
             null
         }
-        showNotification(true, t?.ifBlank { null })
+        val clean = t?.ifBlank { null }
+        updateState(true, clean)
+        showNotification(true, clean)
     }
 
     private fun cancelNotification() {
-        try {
-            (appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)?.cancel(1)
-        } catch (_: Exception) {
-        }
+        TtsService.stop(appCtx)
     }
 
     fun lastSpoken(): Int = speaking
@@ -231,29 +338,69 @@ class Speaker(
                     MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
             )
             setCallback(object : MediaSession.Callback() {
+                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                    val ev = mediaButtonIntent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                    if (ev != null) {
+                        if (ev.action == KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+                            when (ev.keyCode) {
+                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                                KeyEvent.KEYCODE_HEADSETHOOK,
+                                KeyEvent.KEYCODE_MEDIA_PLAY,
+                                KeyEvent.KEYCODE_MEDIA_PAUSE,
+                                KeyEvent.KEYCODE_MEDIA_STOP,
+                                KeyEvent.KEYCODE_MEDIA_NEXT,
+                                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                                    dispatchToggle()
+                                    return true
+                                }
+                            }
+                        }
+                        return true
+                    }
+                    return super.onMediaButtonEvent(mediaButtonIntent)
+                }
+
                 override fun onPlay() {
-                    main.post { onMediaToggle?.invoke() }
+                    dispatchToggle()
                 }
 
                 override fun onPause() {
-                    main.post { onMediaToggle?.invoke() }
+                    dispatchToggle()
                 }
 
                 override fun onStop() {
-                    main.post { onMediaToggle?.invoke() }
+                    dispatchToggle()
+                }
+
+                override fun onSkipToNext() {
+                    dispatchToggle()
+                }
+
+                override fun onSkipToPrevious() {
+                    dispatchToggle()
                 }
             })
         }
-        // 舊式通道也指過來：系統按顯式 Receiver 派送（三星认这个）
+        // 舊式通道也指過來：注意 Android 12+ (API 31+) PendingIntent 必須是 FLAG_MUTABLE，
+        // 系統才塞得進 EXTRA_KEY_EVENT（之前寫 IMMUTABLE 導致 event 永遠是 null！）
         try {
+            val mutFlag = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
             val pi = PendingIntent.getBroadcast(
                 appCtx, 0,
                 Intent(appCtx, MediaButtonReceiver::class.java).setAction(Intent.ACTION_MEDIA_BUTTON),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or mutFlag
             )
             session?.setMediaButtonReceiver(pi)
+            if (Build.VERSION.SDK_INT >= 31) {
+                session?.setMediaButtonBroadcastReceiver(
+                    ComponentName(appCtx, MediaButtonReceiver::class.java)
+                )
+            }
         } catch (_: Exception) {
         }
+        // 啟動時就先激活 session 並宣告本進程為媒體播放者，讓耳機隨時按都能直接開讀
+        updateState(false)
+        claimMediaButtonSession()
     }
 
     /**
@@ -268,6 +415,15 @@ class Speaker(
                 return@TextToSpeech
             }
             val t = tts ?: return@TextToSpeech
+            try {
+                t.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+            } catch (_: Exception) {
+            }
             // 繁→簡→中：第一個可用的中文語音
             val ok = listOf(Locale.TRADITIONAL_CHINESE, Locale.SIMPLIFIED_CHINESE, Locale.CHINESE)
                 .any { loc ->
@@ -319,6 +475,7 @@ class Speaker(
 
     /** 從第 from 行開始播。引擎還沒好就先建，等好了自動開播。 */
     fun play(from: Int) {
+        acquireWakeLock()
         if (tts == null) {
             initEngine()
             pendingPlay = maxOf(0, from)
@@ -329,6 +486,7 @@ class Speaker(
             return
         }
         requestFocus()
+        claimMediaButtonSession()
         try {
             tts?.setSpeechRate(speechRate)
             tts?.setPitch(pitch)
@@ -341,9 +499,11 @@ class Speaker(
         topUp()
         val src = source()
         if (queued == 0) {
+            releaseWakeLock()
             // play 可能跑在 binder 線程（懶加載回調），listener 一律 post 到主線程
             if (src == null || nextLine >= src.size) {
                 abandonFocus()
+                cancelNotification()
                 post { listener.onBookDone() }
             } else post { listener.onTtsError("後面沒有可朗讀的文字") }
             return
@@ -357,6 +517,7 @@ class Speaker(
     /** 暫停：清空引擎佇列，行號已記住，繼續時從該行重播。 */
     fun pause() {
         playing = false
+        releaseWakeLock()
         tts?.stop()
         queued = 0
         // 故意保持 session 活躍：暫停後耳機還能按繼續
@@ -365,15 +526,15 @@ class Speaker(
     }
 
     fun stop() {
-        pause()
+        playing = false
+        releaseWakeLock()
+        tts?.stop()
+        queued = 0
         speaking = -1
         nextLine = -1
         abandonFocus()
-        // 完全停止才關 session（換書／切簡繁／退出）
-        try {
-            session?.isActive = false
-        } catch (_: Exception) {
-        }
+        // 保持 session 活躍設為 paused，讓藍牙耳機就算按過停止也還能隨時按播放鍵重啟
+        updateState(false)
         cancelNotification()
     }
 
@@ -397,6 +558,7 @@ class Speaker(
     private fun topUp() {
         val src = source() ?: return
         val t = tts ?: return
+        if (playing) acquireWakeLock()
         var n = nextLine
         while (queued < 30 && n < src.size) {
             val text = try {
@@ -435,7 +597,10 @@ class Speaker(
         val src = source()
         if (queued == 0 && (src == null || nextLine >= src.size)) {
             playing = false
+            releaseWakeLock()
             abandonFocus()
+            updateState(false)
+            cancelNotification()
             post { listener.onBookDone() }
         }
     }
@@ -497,6 +662,7 @@ class Speaker(
     }
 
     fun release() {
+        releaseWakeLock()
         try {
             noisyReceiver?.let { appCtx.unregisterReceiver(it) }
         } catch (_: Exception) {
@@ -510,6 +676,7 @@ class Speaker(
         }
         stop()
         try {
+            session?.isActive = false
             session?.release()
         } catch (_: Exception) {
         }

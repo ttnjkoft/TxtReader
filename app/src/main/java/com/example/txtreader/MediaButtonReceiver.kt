@@ -35,9 +35,10 @@ class MediaButtonReceiver : BroadcastReceiver() {
         if (Intent.ACTION_MEDIA_BUTTON != intent.action) return
         @Suppress("DEPRECATION")
         val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
-        if (event.action != KeyEvent.ACTION_DOWN) return
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return
         when (event.keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_HEADSETHOOK,
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE,
             KeyEvent.KEYCODE_MEDIA_STOP -> {

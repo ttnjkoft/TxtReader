@@ -32,7 +32,7 @@ object DropboxSync {
 
     private fun ownPath(ctx: Context) = "/$FILE_PREFIX${deviceId(ctx)}$FILE_SUFFIX"
 
-    data class SyncResult(val msg: String, val watched: Book?)
+    data class SyncResult(val msg: String, val watched: Book?, val furtherRemote: Book? = null)
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences("dropbox", Context.MODE_PRIVATE)
@@ -92,12 +92,19 @@ object DropboxSync {
         val dao = Db.get(appCtx).books()
         val local = dao.all()
         val api = client(appCtx)
-        val merged = merge(local, downloadAll(api))
+        val remoteAll = downloadAll(api)
+        val merged = merge(local, remoteAll)
         val localNames = local.map { it.name }.toHashSet()
         merged.filter { it.name in localNames }.forEach { dao.upsert(it) }
         writeOwn(api, appCtx, Backup.export(dao.all()))
         val watched = watchName?.let { n -> merged.find { it.name == n } }
-        return SyncResult("同步完成（${merged.size} 本，Dropbox）", watched)
+        val further = if (watched != null) {
+            remoteAll
+                .filter { it.name == watched.name }
+                .maxWithOrNull(compareBy<Book> { it.lastLine }.thenBy { it.lastOffset })
+                ?.takeIf { it.lastLine > watched.lastLine || (it.lastLine == watched.lastLine && it.lastOffset > watched.lastOffset) }
+        } else null
+        return SyncResult("同步完成（${merged.size} 本，Dropbox）", watched, further)
     }
 
     /** 存檔後順手上傳：只寫自己那份，幾 KB，一次 PUT。未登入直接跳過。 */

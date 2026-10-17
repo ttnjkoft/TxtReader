@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 自動更新：調起系統安裝器裝下載的 APK（每支手機開一次未知來源即可） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 背景長時間朗讀：前景服務＋WakeLock＋通知列媒體控制 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Dropbox 官方 App 裝了就走它授權，沒裝走瀏覽器（都要先宣告才看得到） -->
     <queries>
@@ -36,6 +41,12 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- 背景長時間朗讀前景服務 -->
+        <service
+            android:name=".TtsService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!-- Dropbox 授權回跳：scheme 的 key 換成 App Console 那串 -->
         <activity
