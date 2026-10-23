@@ -72,6 +72,15 @@ object S2T {
             for (e in map.entries) {
                 if ('喫' in e.value) e.setValue(e.value.replace('喫', '吃'))
             }
+            // —— 個人習慣覆寫（只改值，不改 key，語義最清） ——
+            // 1) 參：防止極少數落單字被拆成蔘
+            if (map["参"] == "蔘") map["参"] = "參"
+            // 2) 裏 → 裡（台灣慣用形）
+            if (map["里"] == "裏") map["里"] = "裡"
+            // 3) 纔 → 才（剛才、何時纔等詞組會帶出纔，改回才）
+            for (e in map.entries) {
+                if ('纔' in e.value) e.setValue(e.value.replace('纔', '才'))
+            }
             dict = map
             singleChars = singles
             maxLen = mLen

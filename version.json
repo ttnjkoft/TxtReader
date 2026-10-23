@@ -1,6 +1,6 @@
 {
-    "versionCode":  11,
-    "versionName":  "1.4.4",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.4/TxtReader.apk",
-    "notes":  "TTS前景服務與WakeLock防休眠；藍牙耳機按鍵修復；Dropbox自動同步與防舊蓋新修正"
+    "versionCode":  12,
+    "versionName":  "1.4.5",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.5/TxtReader.apk",
+    "notes":  "修改台灣常用字"
 }
