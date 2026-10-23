@@ -75,9 +75,10 @@ try {
         $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases/tags/v$VersionName" -Headers $headers
         Write-Output "release v$VersionName 已存在，跳過建立"
     } catch {
-        $relBody = @{ tag_name = "v$VersionName"; name = "v$VersionName"; body = $Notes } | ConvertTo-Json
+        $relBody = @{ tag_name = "v$VersionName"; name = "v$VersionName"; body = $Notes } | ConvertTo-Json -Depth 5
+        $utf8Body = [System.Text.Encoding]::UTF8.GetBytes($relBody)
         try {
-            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases" -Method Post -Headers $headers -Body $relBody -ContentType "application/json"
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/ttnjkoft/TxtReader/releases" -Method Post -Headers $headers -Body $utf8Body -ContentType "application/json"
         } catch {
             throw "建 release 失敗：$($_.Exception.Message)"
         }
