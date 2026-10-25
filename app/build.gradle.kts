@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.txtreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "1.4.6"
+        versionCode = 14
+        versionName = "1.4.7"
     }
 
     signingConfigs {

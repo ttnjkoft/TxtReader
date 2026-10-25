@@ -79,6 +79,8 @@ object S2T {
             map["里"] = "裡"
             // 3) 才：永遠不轉成纔（剛才、何時才等詞組強制回才）
             map["才"] = "才"
+            map["回"] = "回"
+            map["群"] = "群"
             for (e in map.entries) {
                 if ('纔' in e.value) e.setValue(e.value.replace('纔', '才'))
             }

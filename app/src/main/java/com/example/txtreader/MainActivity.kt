@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     // 最後存過的位置：沒動就不存，免得舊位置配新時間戳洗掉別台進度
     private var lastSavedPos: TextPos? = null
     private var fontLabelView: TextView? = null
+    private var volumeKeyPaging = true
 
     private val openDoc = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) openUri(uri)
@@ -104,6 +105,7 @@ class MainActivity : AppCompatActivity() {
         reader.paragraphGapDp = prefs.getFloat("gapDp", 8f)
         reader.justifyEdges = prefs.getBoolean("justify", true)
         reader.textColor = prefs.getInt("textColor", Color.parseColor("#FFFFFF"))
+        volumeKeyPaging = prefs.getBoolean("volumeKeyPaging", true)
         // 自選字型：內部拷貝還在就套用，不在就靜靜用系統預設
         prefs.getString("fontPath", null)?.let { p ->
             try {
@@ -563,6 +565,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("indent", reader.firstLineIndent)
             .putFloat("gapDp", reader.paragraphGapDp)
             .putBoolean("justify", reader.justifyEdges)
+            .putBoolean("volumeKeyPaging", volumeKeyPaging)
             .putFloat("speechRate", speaker.speechRate)
             .putFloat("pitch", speaker.pitch)
             .apply()
@@ -671,6 +674,13 @@ class MainActivity : AppCompatActivity() {
         }
         justifyBox.setOnCheckedChangeListener { _, checked -> reader.justifyEdges = checked }
         root.addView(justifyBox)
+        val volumeKeyPagingBox = CheckBox(this).apply {
+            text = "音量鍵翻頁"
+            isChecked = volumeKeyPaging
+            setTextColor(Color.parseColor("#E0E0E0"))
+        }
+        volumeKeyPagingBox.setOnCheckedChangeListener { _, checked -> volumeKeyPaging = checked }
+        root.addView(volumeKeyPagingBox)
         root.addView(label("字色"))
         val colors = intArrayOf(
             Color.parseColor("#FFFFFF"),
@@ -1293,6 +1303,22 @@ class MainActivity : AppCompatActivity() {
                     if (::speaker.isInitialized) speaker.dispatchToggle()
                 }
                 return true
+            }
+            android.view.KeyEvent.KEYCODE_VOLUME_UP,
+            android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                val isReading = ::reader.isInitialized &&
+                    (!::shelfPanel.isInitialized || shelfPanel.visibility != View.VISIBLE) &&
+                    (!::tocPanel.isInitialized || tocPanel.visibility != View.VISIBLE)
+                if (volumeKeyPaging && isReading && !(::speaker.isInitialized && speaker.isPlaying())) {
+                    if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+                            reader.nextPage()
+                        } else {
+                            reader.prevPage()
+                        }
+                    }
+                    return true
+                }
             }
         }
         return super.dispatchKeyEvent(event)

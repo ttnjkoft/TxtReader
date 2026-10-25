@@ -1,6 +1,6 @@
 {
-    "versionCode":  13,
-    "versionName":  "1.4.6",
-    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.6/TxtReader.apk",
-    "notes":  "修改我的習慣用字"
+    "versionCode":  14,
+    "versionName":  "1.4.7",
+    "apkUrl":  "https://github.com/ttnjkoft/TxtReader/releases/download/v1.4.7/TxtReader.apk",
+    "notes":  "加入音量鍵翻頁"
 }
